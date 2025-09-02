@@ -109,4 +109,77 @@ function jsonResponse($data, $status = 200) {
     echo json_encode($data);
     exit();
 }
+
+// Auto-assign students to venues when exam schedules are created
+function assignStudentsToVenues($db, $examId) {
+    try {
+        // Get all students enrolled in this exam's course
+        $studentsQuery = "SELECT DISTINCT sce.student_id
+                         FROM student_course_enrollments sce
+                         JOIN examinations e ON sce.course_id = e.course_id AND sce.exam_period_id = e.exam_period_id
+                         WHERE e.exam_id = :exam_id AND sce.status = 'Registered'
+                         ORDER BY sce.enrollment_date";
+        $studentsStmt = $db->prepare($studentsQuery);
+        $studentsStmt->bindParam(':exam_id', $examId);
+        $studentsStmt->execute();
+        $students = $studentsStmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Get all schedules (venues) for this exam
+        $venuesQuery = "SELECT schedule_id, venue_id, capacity_allocated
+                       FROM exam_schedules 
+                       WHERE exam_id = :exam_id
+                       ORDER BY schedule_id";
+        $venuesStmt = $db->prepare($venuesQuery);
+        $venuesStmt->bindParam(':exam_id', $examId);
+        $venuesStmt->execute();
+        $venues = $venuesStmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (empty($venues)) {
+            return false;
+        }
+        
+        // Assign students to venues in round-robin fashion
+        $venueIndex = 0;
+        $venueAssignments = array_fill_keys(array_column($venues, 'schedule_id'), 0);
+        
+        foreach ($students as $student) {
+            $currentVenue = $venues[$venueIndex];
+            
+            // Check if current venue has capacity
+            if ($venueAssignments[$currentVenue['schedule_id']] < $currentVenue['capacity_allocated']) {
+                // Assign student to this venue
+                $assignQuery = "INSERT INTO student_venue_assignments (student_id, schedule_id, seat_number) 
+                               VALUES (:student_id, :schedule_id, :seat_number)
+                               ON DUPLICATE KEY UPDATE schedule_id = :schedule_id";
+                $assignStmt = $db->prepare($assignQuery);
+                $assignStmt->bindParam(':student_id', $student['student_id']);
+                $assignStmt->bindParam(':schedule_id', $currentVenue['schedule_id']);
+                $seatNumber = 'S' . str_pad($venueAssignments[$currentVenue['schedule_id']] + 1, 3, '0', STR_PAD_LEFT);
+                $assignStmt->bindParam(':seat_number', $seatNumber);
+                $assignStmt->execute();
+                
+                $venueAssignments[$currentVenue['schedule_id']]++;
+            }
+            
+            // Move to next venue (round-robin)
+            $venueIndex = ($venueIndex + 1) % count($venues);
+        }
+        
+        // Update students_assigned count in exam_schedules
+        foreach ($venues as $venue) {
+            $updateQuery = "UPDATE exam_schedules 
+                           SET students_assigned = :students_assigned 
+                           WHERE schedule_id = :schedule_id";
+            $updateStmt = $db->prepare($updateQuery);
+            $updateStmt->bindParam(':students_assigned', $venueAssignments[$venue['schedule_id']]);
+            $updateStmt->bindParam(':schedule_id', $venue['schedule_id']);
+            $updateStmt->execute();
+        }
+        
+        return true;
+    } catch (Exception $e) {
+        error_log("Error assigning students to venues: " . $e->getMessage());
+        return false;
+    }
+}
 ?>

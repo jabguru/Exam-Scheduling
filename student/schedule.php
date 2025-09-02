@@ -25,25 +25,47 @@ try {
         throw new Exception('Student profile not found.');
     }
     
-        // Get exam schedule for this student based on course enrollments
+        // Get exam schedule for this student based on course enrollments with venue assignments
     $query = "SELECT 
                 c.course_code,
                 c.course_title,
                 e.exam_type,
-                es.exam_date,
-                es.start_time,
-                es.end_time,
-                v.venue_name,
-                v.location,
                 sce.enrollment_date,
-                'Enrolled' as status
+                'Enrolled' as status,
+                (SELECT MIN(exam_date) FROM exam_schedules WHERE exam_id = e.exam_id) as exam_date,
+                (SELECT MIN(start_time) FROM exam_schedules WHERE exam_id = e.exam_id) as start_time,
+                (SELECT MIN(end_time) FROM exam_schedules WHERE exam_id = e.exam_id) as end_time,
+                (SELECT GROUP_CONCAT(DISTINCT v.venue_name ORDER BY v.venue_name SEPARATOR ', ') 
+                 FROM exam_schedules es 
+                 JOIN venues v ON es.venue_id = v.venue_id 
+                 WHERE es.exam_id = e.exam_id) as all_venues,
+                (SELECT GROUP_CONCAT(DISTINCT v.location ORDER BY v.venue_name SEPARATOR ', ') 
+                 FROM exam_schedules es 
+                 JOIN venues v ON es.venue_id = v.venue_id 
+                 WHERE es.exam_id = e.exam_id) as all_locations,
+                (SELECT seat_number FROM student_venue_assignments sva2 
+                 WHERE sva2.student_id = sce.student_id 
+                 AND sva2.schedule_id IN (SELECT schedule_id FROM exam_schedules WHERE exam_id = e.exam_id)
+                 LIMIT 1) as seat_number,
+                (SELECT av.venue_name FROM student_venue_assignments sva3
+                 JOIN exam_schedules es3 ON sva3.schedule_id = es3.schedule_id
+                 JOIN venues av ON es3.venue_id = av.venue_id
+                 WHERE sva3.student_id = sce.student_id 
+                 AND es3.exam_id = e.exam_id
+                 LIMIT 1) as assigned_venue,
+                (SELECT av.location FROM student_venue_assignments sva4
+                 JOIN exam_schedules es4 ON sva4.schedule_id = es4.schedule_id
+                 JOIN venues av ON es4.venue_id = av.venue_id
+                 WHERE sva4.student_id = sce.student_id 
+                 AND es4.exam_id = e.exam_id
+                 LIMIT 1) as assigned_location,
+                (SELECT TIMESTAMPDIFF(MINUTE, MIN(start_time), MIN(end_time)) 
+                 FROM exam_schedules WHERE exam_id = e.exam_id) as duration_minutes
               FROM student_course_enrollments sce
               JOIN examinations e ON sce.course_id = e.course_id AND sce.exam_period_id = e.exam_period_id
               JOIN courses c ON e.course_id = c.course_id
-              LEFT JOIN exam_schedules es ON e.exam_id = es.exam_id
-              LEFT JOIN venues v ON es.venue_id = v.venue_id
               WHERE sce.student_id = :student_id AND sce.status = 'Registered'
-              ORDER BY es.exam_date, es.start_time";
+              ORDER BY exam_date, start_time";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':student_id', $student['student_id']);
     $stmt->execute();
@@ -51,7 +73,7 @@ try {
     
     // Group exams by date
     $examsByDate = [];
-    foreach ($examSchedules as $exam) {
+    foreach ($examSchedule as $exam) {
         if ($exam['exam_date']) {
             $date = $exam['exam_date'];
             if (!isset($examsByDate[$date])) {
@@ -225,21 +247,34 @@ include '../includes/header.php';
                                         </div>
                                         
                                         <div class="row mt-2">
-                                            <div class="col-8">
+                                            <div class="col-12">
                                                 <small class="text-muted">
-                                                    <i class="fas fa-map-marker-alt"></i> Venue:<br>
-                                                    <strong class="exam-venue"><?php echo htmlspecialchars($exam['venue_name']); ?></strong>
-                                                    <?php if ($exam['location']): ?>
-                                                    <br><span class="text-muted"><?php echo htmlspecialchars($exam['location']); ?></span>
+                                                    <i class="fas fa-map-marker-alt"></i> All Venues:<br>
+                                                    <strong class="exam-venue"><?php echo htmlspecialchars($exam['all_venues'] ?: 'Not scheduled'); ?></strong>
+                                                    <?php if ($exam['all_locations']): ?>
+                                                    <br><span class="text-muted"><?php echo htmlspecialchars($exam['all_locations']); ?></span>
                                                     <?php endif; ?>
                                                 </small>
-                                            </div>
-                                            <div class="col-4">
-                                                <?php if ($exam['seat_number']): ?>
-                                                <small class="text-muted">
-                                                    <i class="fas fa-chair"></i> Seat:<br>
-                                                    <strong class="text-primary"><?php echo htmlspecialchars($exam['seat_number']); ?></strong>
-                                                </small>
+                                                
+                                                <?php if ($exam['assigned_venue']): ?>
+                                                <div class="mt-2">
+                                                    <small class="text-success">
+                                                        <i class="fas fa-check-circle"></i> Your Assigned Venue:<br>
+                                                        <strong><?php echo htmlspecialchars($exam['assigned_venue']); ?></strong>
+                                                        <?php if ($exam['assigned_location']): ?>
+                                                        <br><span class="text-muted"><?php echo htmlspecialchars($exam['assigned_location']); ?></span>
+                                                        <?php endif; ?>
+                                                        <?php if ($exam['seat_number']): ?>
+                                                        <br><strong class="text-primary">Seat: <?php echo htmlspecialchars($exam['seat_number']); ?></strong>
+                                                        <?php endif; ?>
+                                                    </small>
+                                                </div>
+                                                <?php else: ?>
+                                                <div class="mt-2">
+                                                    <small class="text-warning">
+                                                        <i class="fas fa-clock"></i> Venue assignment pending
+                                                    </small>
+                                                </div>
                                                 <?php endif; ?>
                                             </div>
                                         </div>

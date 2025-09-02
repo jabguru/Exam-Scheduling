@@ -133,19 +133,21 @@ CREATE TABLE examinations (
     FOREIGN KEY (created_by) REFERENCES users(user_id)
 );
 
--- Exam schedules table
+-- Exam schedules table (supports multiple venues per exam)
 CREATE TABLE exam_schedules (
     schedule_id INT PRIMARY KEY AUTO_INCREMENT,
-    exam_id INT NOT NULL UNIQUE,
+    exam_id INT NOT NULL,
     venue_id INT NOT NULL,
     exam_date DATE NOT NULL,
     start_time TIME NOT NULL,
     end_time TIME NOT NULL,
     capacity_allocated INT NOT NULL,
+    students_assigned INT DEFAULT 0,
     status ENUM('Scheduled', 'Ongoing', 'Completed', 'Cancelled') DEFAULT 'Scheduled',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (exam_id) REFERENCES examinations(exam_id),
-    FOREIGN KEY (venue_id) REFERENCES venues(venue_id)
+    FOREIGN KEY (venue_id) REFERENCES venues(venue_id),
+    UNIQUE KEY unique_exam_venue (exam_id, venue_id)
 );
 
 -- Student course enrollments table
@@ -197,6 +199,18 @@ CREATE TABLE invigilator_assignments (
     assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (schedule_id) REFERENCES exam_schedules(schedule_id),
     FOREIGN KEY (invigilator_id) REFERENCES invigilators(invigilator_id)
+);
+
+-- Student venue assignments table (tracks which venue each student is assigned to for an exam)
+CREATE TABLE student_venue_assignments (
+    assignment_id INT PRIMARY KEY AUTO_INCREMENT,
+    student_id INT NOT NULL,
+    schedule_id INT NOT NULL,
+    seat_number VARCHAR(10),
+    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (student_id) REFERENCES students(student_id),
+    FOREIGN KEY (schedule_id) REFERENCES exam_schedules(schedule_id),
+    UNIQUE KEY unique_student_schedule (student_id, schedule_id)
 );
 
 -- Insert default roles

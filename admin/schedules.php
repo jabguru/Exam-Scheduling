@@ -6,6 +6,284 @@ requireRole('Admin');
 
 $pageTitle = "Schedule Management";
 
+// Helper function to create schedule with multiple venues based on enrollment
+function createScheduleWithMultipleVenues($db, $examId, $primaryVenueId, $examDate, $startTime, $endTime, $capacity) {
+    // Get total enrolled students for this exam
+    $enrollmentQuery = "SELECT COUNT(DISTINCT sce.student_id) as total_students
+                       FROM student_course_enrollments sce
+                       JOIN examinations e ON sce.course_id = e.course_id AND sce.exam_period_id = e.exam_period_id
+                       WHERE e.exam_id = :exam_id AND sce.status = 'Registered'";
+    $enrollmentStmt = $db->prepare($enrollmentQuery);
+    $enrollmentStmt->bindParam(':exam_id', $examId);
+    $enrollmentStmt->execute();
+    $totalStudents = $enrollmentStmt->fetch(PDO::FETCH_ASSOC)['total_students'];
+    
+    // Get primary venue capacity
+    $venueQuery = "SELECT capacity FROM venues WHERE venue_id = :venue_id";
+    $venueStmt = $db->prepare($venueQuery);
+    $venueStmt->bindParam(':venue_id', $primaryVenueId);
+    $venueStmt->execute();
+    $primaryVenueCapacity = $venueStmt->fetch(PDO::FETCH_ASSOC)['capacity'];
+    
+    $venues = [$primaryVenueId];
+    $remainingStudents = $totalStudents;
+    
+    // If primary venue can't accommodate all students, find additional venues
+    if ($totalStudents > $primaryVenueCapacity) {
+        $remainingStudents -= $primaryVenueCapacity;
+        
+        // Find additional available venues for the same time slot
+        $additionalVenuesQuery = "SELECT v.venue_id, v.capacity 
+                                 FROM venues v 
+                                 WHERE v.venue_id != :primary_venue_id
+                                 AND v.venue_id NOT IN (
+                                     SELECT es.venue_id 
+                                     FROM exam_schedules es 
+                                     WHERE es.exam_date = :exam_date 
+                                     AND ((es.start_time <= :start_time AND es.end_time > :start_time) 
+                                          OR (es.start_time < :end_time AND es.end_time >= :end_time)
+                                          OR (es.start_time >= :start_time AND es.end_time <= :end_time))
+                                 )
+                                 ORDER BY v.capacity DESC";
+        $additionalStmt = $db->prepare($additionalVenuesQuery);
+        $additionalStmt->bindParam(':primary_venue_id', $primaryVenueId);
+        $additionalStmt->bindParam(':exam_date', $examDate);
+        $additionalStmt->bindParam(':start_time', $startTime);
+        $additionalStmt->bindParam(':end_time', $endTime);
+        $additionalStmt->execute();
+        $additionalVenues = $additionalStmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($additionalVenues as $venue) {
+            if ($remainingStudents <= 0) break;
+            $venues[] = $venue['venue_id'];
+            $remainingStudents -= $venue['capacity'];
+        }
+        
+        if ($remainingStudents > 0) {
+            setAlert('warning', "Warning: Not enough venue capacity. {$remainingStudents} students may not have seats assigned.");
+        }
+    }
+    
+    // Create schedule entries for all venues
+    $venuesCreated = 0;
+    foreach ($venues as $index => $venueId) {
+        // Calculate capacity for this venue
+        $venueCapacityQuery = "SELECT capacity FROM venues WHERE venue_id = :venue_id";
+        $venueCapStmt = $db->prepare($venueCapacityQuery);
+        $venueCapStmt->bindParam(':venue_id', $venueId);
+        $venueCapStmt->execute();
+        $venueCapacity = $venueCapStmt->fetch(PDO::FETCH_ASSOC)['capacity'];
+        
+        $studentsForThisVenue = min($venueCapacity, $totalStudents - ($venuesCreated * $venueCapacity));
+        
+        $query = "INSERT INTO exam_schedules (exam_id, venue_id, exam_date, start_time, end_time, capacity_allocated, students_assigned) 
+                 VALUES (:exam_id, :venue_id, :exam_date, :start_time, :end_time, :capacity, :students_assigned)";
+        $stmt = $db->prepare($query);
+        $stmt->bindParam(':exam_id', $examId);
+        $stmt->bindParam(':venue_id', $venueId);
+        $stmt->bindParam(':exam_date', $examDate);
+        $stmt->bindParam(':start_time', $startTime);
+        $stmt->bindParam(':end_time', $endTime);
+        $stmt->bindParam(':capacity', min($capacity, $venueCapacity));
+        $stmt->bindParam(':students_assigned', $studentsForThisVenue);
+        $stmt->execute();
+        
+        $venuesCreated++;
+    }
+    
+    // Auto-assign students to venues
+    assignStudentsToVenues($db, $examId);
+    
+    $message = count($venues) === 1 ? 
+        'Schedule created successfully.' : 
+        'Schedule created successfully with ' . count($venues) . ' venues to accommodate all ' . $totalStudents . ' students.';
+    setAlert('success', $message);
+}
+
+// Helper function to update a single schedule
+function updateSingleSchedule($db, $scheduleId, $examId, $venueId, $examDate, $startTime, $endTime, $capacity) {
+    // Check for conflicts
+    $conflictQuery = "SELECT es.*, e.course_id, c.course_code, v.venue_name 
+                     FROM exam_schedules es 
+                     JOIN examinations e ON es.exam_id = e.exam_id
+                     JOIN courses c ON e.course_id = c.course_id
+                     JOIN venues v ON es.venue_id = v.venue_id
+                     WHERE es.venue_id = :venue_id 
+                     AND es.exam_date = :exam_date 
+                     AND es.schedule_id != :schedule_id
+                     AND ((es.start_time <= :start_time AND es.end_time > :start_time) 
+                          OR (es.start_time < :end_time AND es.end_time >= :end_time)
+                          OR (es.start_time >= :start_time AND es.end_time <= :end_time))";
+    
+    $conflictStmt = $db->prepare($conflictQuery);
+    $conflictStmt->bindParam(':venue_id', $venueId);
+    $conflictStmt->bindParam(':exam_date', $examDate);
+    $conflictStmt->bindParam(':start_time', $startTime);
+    $conflictStmt->bindParam(':end_time', $endTime);
+    $conflictStmt->bindParam(':schedule_id', $scheduleId);
+    $conflictStmt->execute();
+    $conflicts = $conflictStmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    if (!empty($conflicts)) {
+        $conflictInfo = $conflicts[0];
+        setAlert('warning', "Schedule conflict: {$conflictInfo['venue_name']} is already booked for {$conflictInfo['course_code']} from {$conflictInfo['start_time']} to {$conflictInfo['end_time']} on {$conflictInfo['exam_date']}.");
+    } else {
+        $query = "UPDATE exam_schedules SET exam_id = :exam_id, venue_id = :venue_id, exam_date = :exam_date, 
+                 start_time = :start_time, end_time = :end_time, capacity_allocated = :capacity 
+                 WHERE schedule_id = :schedule_id";
+        $stmt = $db->prepare($query);
+        $stmt->bindParam(':schedule_id', $scheduleId);
+        $stmt->bindParam(':exam_id', $examId);
+        $stmt->bindParam(':venue_id', $venueId);
+        $stmt->bindParam(':exam_date', $examDate);
+        $stmt->bindParam(':start_time', $startTime);
+        $stmt->bindParam(':end_time', $endTime);
+        $stmt->bindParam(':capacity', $capacity);
+        $stmt->execute();
+        
+        setAlert('success', 'Schedule updated successfully.');
+    }
+}
+
+// Helper function to create schedule with user-selected multiple venues
+function createScheduleWithMultipleVenuesFromForm($db, $examId, $venueIds, $examDate, $startTime, $endTime, $capacity, $capacityMode = 'auto') {
+    try {
+        // Get total enrolled students for this exam
+        $enrollmentQuery = "SELECT COUNT(DISTINCT sce.student_id) as total_students
+                           FROM student_course_enrollments sce
+                           JOIN examinations e ON sce.course_id = e.course_id AND sce.exam_period_id = e.exam_period_id
+                           WHERE e.exam_id = :exam_id AND sce.status = 'Registered'";
+        $enrollmentStmt = $db->prepare($enrollmentQuery);
+        $enrollmentStmt->bindParam(':exam_id', $examId);
+        $enrollmentStmt->execute();
+        $totalStudents = $enrollmentStmt->fetch(PDO::FETCH_ASSOC)['total_students'];
+        
+        $venuesCreated = 0;
+        $totalCapacityAllocated = 0;
+        
+        // Check for conflicts and create schedules for selected venues
+        foreach ($venueIds as $venueId) {
+            $venueId = intval($venueId);
+            
+            // Check for venue conflicts
+            $conflictQuery = "SELECT es.*, e.course_id, c.course_code, v.venue_name 
+                             FROM exam_schedules es 
+                             JOIN examinations e ON es.exam_id = e.exam_id
+                             JOIN courses c ON e.course_id = c.course_id
+                             JOIN venues v ON es.venue_id = v.venue_id
+                             WHERE es.venue_id = :venue_id 
+                             AND es.exam_date = :exam_date 
+                             AND ((es.start_time <= :start_time AND es.end_time > :start_time) 
+                                  OR (es.start_time < :end_time AND es.end_time >= :end_time)
+                                  OR (es.start_time >= :start_time AND es.end_time <= :end_time))";
+            
+            $conflictStmt = $db->prepare($conflictQuery);
+            $conflictStmt->bindParam(':venue_id', $venueId);
+            $conflictStmt->bindParam(':exam_date', $examDate);
+            $conflictStmt->bindParam(':start_time', $startTime);
+            $conflictStmt->bindParam(':end_time', $endTime);
+            $conflictStmt->execute();
+            $conflicts = $conflictStmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            if (!empty($conflicts)) {
+                $conflictInfo = $conflicts[0];
+                setAlert('warning', "Conflict: {$conflictInfo['venue_name']} is already booked for {$conflictInfo['course_code']} at the same time. Skipping this venue.");
+                continue;
+            }
+            
+            // Get venue capacity
+            $venueCapacityQuery = "SELECT capacity FROM venues WHERE venue_id = :venue_id";
+            $venueCapStmt = $db->prepare($venueCapacityQuery);
+            $venueCapStmt->bindParam(':venue_id', $venueId);
+            $venueCapStmt->execute();
+            $venueCapacity = $venueCapStmt->fetch(PDO::FETCH_ASSOC)['capacity'];
+            
+            // Determine capacity allocation based on mode
+            if ($capacityMode === 'auto') {
+                // Use full venue capacity
+                $allocatedCapacity = $venueCapacity;
+            } else {
+                // Use manual capacity, but don't exceed venue maximum
+                $allocatedCapacity = min($capacity, $venueCapacity);
+            }
+            $query = "INSERT INTO exam_schedules (exam_id, venue_id, exam_date, start_time, end_time, capacity_allocated, students_assigned) 
+                     VALUES (:exam_id, :venue_id, :exam_date, :start_time, :end_time, :capacity, 0)";
+            $stmt = $db->prepare($query);
+            $stmt->bindParam(':exam_id', $examId);
+            $stmt->bindParam(':venue_id', $venueId);
+            $stmt->bindParam(':exam_date', $examDate);
+            $stmt->bindParam(':start_time', $startTime);
+            $stmt->bindParam(':end_time', $endTime);
+            $stmt->bindParam(':capacity', $allocatedCapacity);
+            $stmt->execute();
+            
+            $venuesCreated++;
+            $totalCapacityAllocated += $allocatedCapacity;
+        }
+        
+        if ($venuesCreated === 0) {
+            setAlert('danger', 'No venues could be scheduled due to conflicts.');
+            return;
+        }
+        
+        // Auto-assign students to venues
+        assignStudentsToVenues($db, $examId);
+        
+        $modeText = ($capacityMode === 'auto') ? 'full capacity' : $capacity . ' students per venue';
+        $message = "Schedule created successfully with {$venuesCreated} venue(s) using {$modeText} for {$totalStudents} students.";
+        if ($totalStudents > $totalCapacityAllocated) {
+            $message .= " Note: {$totalCapacityAllocated} seats allocated. Consider adding more venues if needed.";
+        }
+        
+        setAlert('success', $message);
+        
+    } catch (Exception $e) {
+        setAlert('danger', 'Error creating schedule: ' . $e->getMessage());
+    }
+}
+
+// Helper function to validate exam date is within academic period
+function validateExamDateWithinPeriod($db, $examId, $examDate) {
+    try {
+        // Get the exam period for this examination
+        $periodQuery = "SELECT ep.start_date, ep.end_date, ep.period_name
+                       FROM examinations e
+                       JOIN exam_periods ep ON e.exam_period_id = ep.exam_period_id
+                       WHERE e.exam_id = :exam_id";
+        $periodStmt = $db->prepare($periodQuery);
+        $periodStmt->bindParam(':exam_id', $examId);
+        $periodStmt->execute();
+        $period = $periodStmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$period) {
+            return [
+                'valid' => false,
+                'message' => 'Could not find academic period for this examination.'
+            ];
+        }
+        
+        $examDateTime = strtotime($examDate);
+        $startDateTime = strtotime($period['start_date']);
+        $endDateTime = strtotime($period['end_date']);
+        
+        if ($examDateTime < $startDateTime || $examDateTime > $endDateTime) {
+            return [
+                'valid' => false,
+                'message' => "Exam date must be within the academic period '{$period['period_name']}' (" . 
+                           date('M j, Y', $startDateTime) . " - " . date('M j, Y', $endDateTime) . ")."
+            ];
+        }
+        
+        return ['valid' => true, 'message' => ''];
+        
+    } catch (Exception $e) {
+        return [
+            'valid' => false,
+            'message' => 'Error validating exam date: ' . $e->getMessage()
+        ];
+    }
+}
+
 // Handle schedule operations
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
@@ -20,69 +298,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($action === 'create' || $action === 'update') {
                 $scheduleId = $_POST['schedule_id'] ?? null;
                 $examId = intval($_POST['exam_id']);
-                $venueId = intval($_POST['venue_id']);
+                $venueIds = $_POST['venue_ids'] ?? [];
+                $primaryVenueId = $_POST['venue_id'] ?? null; // For backward compatibility
                 $examDate = $_POST['exam_date'];
                 $startTime = $_POST['start_time'];
                 $endTime = $_POST['end_time'];
-                $capacity = intval($_POST['capacity']);
+                $capacityMode = $_POST['capacity_mode'] ?? 'auto';
+                $capacity = ($capacityMode === 'manual') ? intval($_POST['capacity']) : null;
                 
-                // Validate times
-                if (strtotime($endTime) <= strtotime($startTime)) {
-                    setAlert('danger', 'End time must be after start time.');
-                } else {
-                // Check for conflicts (venue and time overlap)
-                $conflictQuery = "SELECT es.*, e.course_id, c.course_code, v.venue_name 
-                                 FROM exam_schedules es 
-                                 JOIN examinations e ON es.exam_id = e.exam_id
-                                 JOIN courses c ON e.course_id = c.course_id
-                                 JOIN venues v ON es.venue_id = v.venue_id
-                                 WHERE es.venue_id = :venue_id 
-                                 AND es.exam_date = :exam_date 
-                                 AND ((es.start_time <= :start_time AND es.end_time > :start_time) 
-                                      OR (es.start_time < :end_time AND es.end_time >= :end_time)
-                                      OR (es.start_time >= :start_time AND es.end_time <= :end_time))";                    if ($action === 'update') {
-                    $conflictQuery .= " AND es.schedule_id != :schedule_id";
+                // If venue_ids array is provided, use it; otherwise fall back to single venue_id
+                if (empty($venueIds) && $primaryVenueId) {
+                    $venueIds = [$primaryVenueId];
                 }
-                    
-                    $conflictStmt = $db->prepare($conflictQuery);
-                    $conflictStmt->bindParam(':venue_id', $venueId);
-                    $conflictStmt->bindParam(':exam_date', $examDate);
-                    $conflictStmt->bindParam(':start_time', $startTime);
-                    $conflictStmt->bindParam(':end_time', $endTime);
-                    
-                    if ($action === 'update') {
-                        $conflictStmt->bindParam(':schedule_id', $scheduleId);
-                    }
-                    
-                    $conflictStmt->execute();
-                    $conflicts = $conflictStmt->fetchAll(PDO::FETCH_ASSOC);
-                    
-                    if (!empty($conflicts)) {
-                        $conflictInfo = $conflicts[0];
-                        setAlert('warning', "Schedule conflict: {$conflictInfo['venue_name']} is already booked for {$conflictInfo['course_code']} from {$conflictInfo['start_time']} to {$conflictInfo['end_time']} on {$conflictInfo['exam_date']}.");
+                
+                // Validate that at least one venue is selected
+                if (empty($venueIds)) {
+                    setAlert('danger', 'Please select at least one venue.');
+                } elseif (strtotime($endTime) <= strtotime($startTime)) {
+                    setAlert('danger', 'End time must be after start time.');
+                } elseif ($capacityMode === 'manual' && (!$capacity || $capacity < 1)) {
+                    setAlert('danger', 'Please enter a valid capacity per venue for manual mode.');
+                } else {
+                    // Validate exam date is within active academic period
+                    $periodValidation = validateExamDateWithinPeriod($db, $examId, $examDate);
+                    if (!$periodValidation['valid']) {
+                        setAlert('danger', $periodValidation['message']);
                     } else {
-                        if ($action === 'create') {
-                            $query = "INSERT INTO exam_schedules (exam_id, venue_id, exam_date, start_time, end_time, capacity_allocated) 
-                                     VALUES (:exam_id, :venue_id, :exam_date, :start_time, :end_time, :capacity)";
-                            $stmt = $db->prepare($query);
-                        } else {
-                            $query = "UPDATE exam_schedules SET exam_id = :exam_id, venue_id = :venue_id, exam_date = :exam_date, 
-                                     start_time = :start_time, end_time = :end_time, capacity_allocated = :capacity 
-                                     WHERE schedule_id = :schedule_id";
-                            $stmt = $db->prepare($query);
-                            $stmt->bindParam(':schedule_id', $scheduleId);
-                        }
-                        
-                        $stmt->bindParam(':exam_id', $examId);
-                        $stmt->bindParam(':venue_id', $venueId);
-                        $stmt->bindParam(':exam_date', $examDate);
-                        $stmt->bindParam(':start_time', $startTime);
-                        $stmt->bindParam(':end_time', $endTime);
-                        $stmt->bindParam(':capacity', $capacity);
-                        
-                        $stmt->execute();
-                        
-                        setAlert('success', $action === 'create' ? 'Schedule created successfully.' : 'Schedule updated successfully.');
+                    if ($action === 'create') {
+                        // For new schedules with multiple venues
+                        createScheduleWithMultipleVenuesFromForm($db, $examId, $venueIds, $examDate, $startTime, $endTime, $capacity, $capacityMode);
+                    } else {
+                        // For updates, use the simple update logic (single venue for now)
+                        $venueId = $venueIds[0]; // Use first venue for updates
+                        $updateCapacity = $capacity ?? 50; // Default capacity for updates
+                        updateSingleSchedule($db, $scheduleId, $examId, $venueId, $examDate, $startTime, $endTime, $updateCapacity);
+                    }
                     }
                 }
             } elseif ($action === 'delete') {
@@ -166,18 +416,19 @@ try {
     // Calculate pagination
     $pagination = paginate($page, $totalRecords, $recordsPerPage);
     
-    // Get schedules
+    // Get schedules with enrollment counts
     $query = "SELECT es.*, e.exam_id, e.exam_type, c.course_code, c.course_title, c.academic_level,
                      v.venue_name, v.capacity as max_capacity, d.department_name,
-                     COUNT(DISTINCT er.registration_id) as registered_students
+                     COUNT(DISTINCT sce.student_id) as enrolled_students,
+                     GROUP_CONCAT(DISTINCT CONCAT(v.venue_name, ' (', es.capacity_allocated, '/', v.capacity, ')') SEPARATOR ', ') as all_venues
               FROM exam_schedules es 
               JOIN examinations e ON es.exam_id = e.exam_id
               JOIN courses c ON e.course_id = c.course_id
               JOIN departments d ON c.department_id = d.department_id
               JOIN venues v ON es.venue_id = v.venue_id
-              LEFT JOIN exam_registrations er ON e.exam_id = er.exam_id" . 
+              LEFT JOIN student_course_enrollments sce ON c.course_id = sce.course_id AND sce.status = 'Registered'" . 
               $whereClause . 
-              " GROUP BY es.schedule_id
+              " GROUP BY e.exam_id
               ORDER BY es.exam_date, es.start_time 
               LIMIT :limit OFFSET :offset";
     
@@ -276,11 +527,11 @@ include '../includes/header.php';
                             <tr>
                                 <th>Course</th>
                                 <th>Exam Type</th>
-                                <th>Venue</th>
+                                <th>Venues</th>
                                 <th>Date</th>
                                 <th>Time</th>
-                                <th>Capacity</th>
-                                <th>Registered</th>
+                                <th>Total Capacity</th>
+                                <th>Enrolled</th>
                                 <th>Utilization</th>
                                 <th>Actions</th>
                             </tr>
@@ -288,7 +539,13 @@ include '../includes/header.php';
                         <tbody>
                             <?php foreach ($schedules as $schedule): ?>
                             <?php 
-                                $utilization = $schedule['capacity_allocated'] > 0 ? ($schedule['registered_students'] / $schedule['capacity_allocated']) * 100 : 0;
+                                // Calculate total capacity for all venues of this exam
+                                $totalCapacityQuery = "SELECT SUM(capacity_allocated) as total_capacity FROM exam_schedules WHERE exam_id = ?";
+                                $totalCapStmt = $db->prepare($totalCapacityQuery);
+                                $totalCapStmt->execute([$schedule['exam_id']]);
+                                $totalCapacity = $totalCapStmt->fetch(PDO::FETCH_ASSOC)['total_capacity'] ?? 0;
+                                
+                                $utilization = $totalCapacity > 0 ? ($schedule['enrolled_students'] / $totalCapacity) * 100 : 0;
                                 $utilizationClass = $utilization > 90 ? 'bg-danger' : ($utilization > 70 ? 'bg-warning' : 'bg-success');
                             ?>
                             <tr>
@@ -303,8 +560,7 @@ include '../includes/header.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <strong><?php echo htmlspecialchars($schedule['venue_name']); ?></strong>
-                                    <br><small class="text-muted">Max: <?php echo $schedule['max_capacity']; ?></small>
+                                    <small class="text-muted"><?php echo htmlspecialchars($schedule['all_venues']); ?></small>
                                 </td>
                                 <td>
                                     <?php echo date('M j, Y', strtotime($schedule['exam_date'])); ?>
@@ -315,10 +571,10 @@ include '../includes/header.php';
                                     <br><small class="text-muted">to <?php echo date('g:i A', strtotime($schedule['end_time'])); ?></small>
                                 </td>
                                 <td>
-                                    <span class="badge bg-secondary"><?php echo $schedule['capacity_allocated']; ?></span>
+                                    <span class="badge bg-secondary"><?php echo $totalCapacity; ?></span>
                                 </td>
                                 <td>
-                                    <span class="badge bg-info"><?php echo $schedule['registered_students']; ?></span>
+                                    <span class="badge bg-info"><?php echo $schedule['enrolled_students']; ?></span>
                                 </td>
                                 <td>
                                     <div class="progress" style="height: 20px;">
@@ -403,15 +659,28 @@ include '../includes/header.php';
                             </select>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label for="venueId" class="form-label">Venue *</label>
-                            <select class="form-control" id="venueId" name="venue_id" required onchange="updateCapacity()">
-                                <option value="">Select Venue</option>
-                                <?php foreach ($venues as $venue): ?>
-                                <option value="<?php echo $venue['venue_id']; ?>" data-capacity="<?php echo $venue['capacity']; ?>">
-                                    <?php echo htmlspecialchars($venue['venue_name'] . ' (Max: ' . $venue['capacity'] . ')'); ?>
-                                </option>
-                                <?php endforeach; ?>
-                            </select>
+                            <label for="venueIds" class="form-label">Venues *</label>
+                            <div id="venue-selection" class="border rounded p-3">
+                                <div class="mb-2">
+                                    <small class="text-muted">Select primary venue first, then additional venues if needed</small>
+                                </div>
+                                <div id="selected-venues" class="mb-3">
+                                    <!-- Selected venues will appear here -->
+                                </div>
+                                <select class="form-control" id="venueSelector" onchange="addVenue()">
+                                    <option value="">Add Venue</option>
+                                    <?php foreach ($venues as $venue): ?>
+                                    <option value="<?php echo $venue['venue_id']; ?>" 
+                                            data-capacity="<?php echo $venue['capacity']; ?>"
+                                            data-name="<?php echo htmlspecialchars($venue['venue_name']); ?>">
+                                        <?php echo htmlspecialchars($venue['venue_name'] . ' (Capacity: ' . $venue['capacity'] . ')'); ?>
+                                    </option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <div class="mt-2">
+                                    <small id="total-capacity" class="text-info">Total Capacity: 0</small>
+                                </div>
+                            </div>
                         </div>
                     </div>
                     
@@ -430,10 +699,60 @@ include '../includes/header.php';
                         </div>
                     </div>
                     
-                    <div class="mb-3">
-                        <label for="capacity" class="form-label">Exam Capacity *</label>
-                        <input type="number" class="form-control" id="capacity" name="capacity" required min="1">
-                        <div class="form-text">Maximum number of students for this exam (cannot exceed venue capacity)</div>
+                    <div class="row">
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label">Capacity Management</label>
+                            <div class="card border-light">
+                                <div class="card-body">
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio" name="capacity_mode" id="auto_capacity" value="auto" checked onchange="toggleCapacityMode()">
+                                        <label class="form-check-label" for="auto_capacity">
+                                            <strong>Automatic</strong> - Use full venue capacity (Recommended)
+                                        </label>
+                                    </div>
+                                    <div class="form-check form-check-inline">
+                                        <input class="form-check-input" type="radio" name="capacity_mode" id="manual_capacity" value="manual" onchange="toggleCapacityMode()">
+                                        <label class="form-check-label" for="manual_capacity">
+                                            <strong>Manual</strong> - Set specific capacity per venue
+                                        </label>
+                                    </div>
+                                    
+                                    <div id="manual_capacity_input" class="mt-3" style="display: none;">
+                                        <div class="row">
+                                            <div class="col-md-6">
+                                                <label for="capacity" class="form-label">Students Per Venue</label>
+                                                <input type="number" class="form-control" id="capacity" name="capacity" min="1" placeholder="e.g., 50">
+                                                <div class="form-text">How many students to assign to EACH selected venue</div>
+                                            </div>
+                                            <div class="col-md-6">
+                                                <label class="form-label">Example</label>
+                                                <div class="form-control-plaintext">
+                                                    <small class="text-muted">If you select 2 venues and set 50 students per venue, total capacity = 100 students</small>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div id="auto_capacity_info" class="mt-3 alert alert-info">
+                                        <i class="fas fa-magic"></i> <strong>Automatic Mode:</strong> System will use the full capacity of each selected venue and distribute students optimally.
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label">Enrollment Info</label>
+                            <div id="enrollment-info" class="form-control-plaintext">
+                                <small class="text-muted">Select an examination to see enrollment count</small>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle"></i>
+                        <strong>Smart Venue Assignment:</strong> The system will automatically assign additional venues if enrollment exceeds the selected venue capacity.
                     </div>
                 </div>
                 
@@ -475,11 +794,15 @@ include '../includes/header.php';
 </div>
 
 <script>
+let selectedVenues = [];
+
 function openScheduleModal() {
     document.getElementById('scheduleModalTitle').textContent = 'Add Schedule';
     document.getElementById('formAction').value = 'create';
     document.getElementById('scheduleForm').reset();
     document.getElementById('scheduleId').value = '';
+    selectedVenues = [];
+    updateVenueDisplay();
 }
 
 function editSchedule(schedule) {
@@ -487,15 +810,178 @@ function editSchedule(schedule) {
     document.getElementById('formAction').value = 'update';
     document.getElementById('scheduleId').value = schedule.schedule_id;
     document.getElementById('examId').value = schedule.exam_id;
-    document.getElementById('venueId').value = schedule.venue_id;
     document.getElementById('examDate').value = schedule.exam_date;
     document.getElementById('startTime').value = schedule.start_time;
     document.getElementById('endTime').value = schedule.end_time;
     document.getElementById('capacity').value = schedule.capacity;
     
-    updateCapacity(); // Update max capacity based on selected venue
+    // For editing, add the current venue to selected venues
+    selectedVenues = [schedule.venue_id.toString()];
+    updateVenueDisplay();
     
     new bootstrap.Modal(document.getElementById('scheduleModal')).show();
+}
+
+function addVenue() {
+    const venueSelector = document.getElementById('venueSelector');
+    const selectedOption = venueSelector.options[venueSelector.selectedIndex];
+    
+    if (selectedOption.value && !selectedVenues.includes(selectedOption.value)) {
+        selectedVenues.push(selectedOption.value);
+        updateVenueDisplay();
+        venueSelector.value = ''; // Reset selector
+    }
+}
+
+function removeVenue(venueId) {
+    selectedVenues = selectedVenues.filter(id => id !== venueId);
+    updateVenueDisplay();
+}
+
+function updateVenueDisplay() {
+    const container = document.getElementById('selected-venues');
+    const venueSelector = document.getElementById('venueSelector');
+    const totalCapacitySpan = document.getElementById('total-capacity');
+    
+    container.innerHTML = '';
+    let totalCapacity = 0;
+    
+    selectedVenues.forEach((venueId, index) => {
+        const option = venueSelector.querySelector(`option[value="${venueId}"]`);
+        if (option) {
+            const capacity = parseInt(option.dataset.capacity);
+            totalCapacity += capacity;
+            
+            const venueTag = document.createElement('div');
+            venueTag.className = 'badge bg-primary me-2 mb-2 p-2 d-inline-flex align-items-center';
+            venueTag.innerHTML = `
+                <span>${option.dataset.name} (${capacity})</span>
+                <button type="button" class="btn-close btn-close-white ms-2" 
+                        onclick="removeVenue('${venueId}')" style="font-size: 0.6em;"></button>
+                <input type="hidden" name="venue_ids[]" value="${venueId}">
+            `;
+            container.appendChild(venueTag);
+        }
+    });
+    
+    // Add primary venue input for backward compatibility
+    if (selectedVenues.length > 0) {
+        const primaryInput = document.createElement('input');
+        primaryInput.type = 'hidden';
+        primaryInput.name = 'venue_id';
+        primaryInput.value = selectedVenues[0];
+        container.appendChild(primaryInput);
+    }
+    
+    totalCapacitySpan.textContent = `Total Capacity: ${totalCapacity}`;
+    
+    // Update venue selector options to hide already selected venues
+    Array.from(venueSelector.options).forEach(option => {
+        if (option.value) {
+            option.style.display = selectedVenues.includes(option.value) ? 'none' : 'block';
+        }
+    });
+    
+    // Update enrollment info if exam is selected
+    updateEnrollmentInfo();
+}
+
+function updateEnrollmentInfo() {
+    const examSelect = document.getElementById('examId');
+    const enrollmentInfo = document.getElementById('enrollment-info');
+    const examDateInput = document.getElementById('examDate');
+    
+    if (examSelect.value) {
+        // Calculate total capacity from selected venues
+        const totalCapacity = selectedVenues.reduce((sum, venueId) => {
+            const option = document.getElementById('venueSelector').querySelector(`option[value="${venueId}"]`);
+            return sum + (option ? parseInt(option.dataset.capacity) : 0);
+        }, 0);
+        
+        // Get exam period dates and update date input constraints
+        fetch('get_exam_period_dates.php', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+            },
+            body: `exam_id=${examSelect.value}`
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Set date picker constraints
+                examDateInput.min = data.start_date;
+                examDateInput.max = data.end_date;
+                
+                // Show enrollment info with period constraints
+                enrollmentInfo.innerHTML = `
+                    <div class="row">
+                        <div class="col-3">
+                            <strong>Selected Venues:</strong> <span class="badge bg-info">${selectedVenues.length}</span>
+                        </div>
+                        <div class="col-3">
+                            <strong>Total Capacity:</strong> <span class="badge bg-primary">${totalCapacity}</span>
+                        </div>
+                        <div class="col-3">
+                            <strong>Mode:</strong> <span class="badge bg-success" id="capacity-mode-badge">Automatic</span>
+                        </div>
+                        <div class="col-3">
+                            <strong>Period:</strong> <span class="badge bg-secondary">${data.period_name}</span>
+                        </div>
+                    </div>
+                    <div class="mt-2">
+                        <small class="text-info">
+                            <i class="fas fa-calendar"></i> Valid dates: ${data.start_date} to ${data.end_date}
+                        </small>
+                    </div>
+                `;
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching exam period:', error);
+            enrollmentInfo.innerHTML = `
+                <div class="row">
+                    <div class="col-4">
+                        <strong>Selected Venues:</strong> <span class="badge bg-info">${selectedVenues.length}</span>
+                    </div>
+                    <div class="col-4">
+                        <strong>Total Capacity:</strong> <span class="badge bg-primary">${totalCapacity}</span>
+                    </div>
+                    <div class="col-4">
+                        <strong>Mode:</strong> <span class="badge bg-success" id="capacity-mode-badge">Automatic</span>
+                    </div>
+                </div>
+                <div class="mt-2">
+                    <small class="text-muted">System will auto-assign additional venues if needed based on enrollment</small>
+                </div>
+            `;
+        });
+    } else {
+        enrollmentInfo.innerHTML = '<small class="text-muted">Select an examination to see venue info</small>';
+        examDateInput.removeAttribute('min');
+        examDateInput.removeAttribute('max');
+    }
+}
+
+function toggleCapacityMode() {
+    const autoMode = document.getElementById('auto_capacity').checked;
+    const manualInput = document.getElementById('manual_capacity_input');
+    const autoInfo = document.getElementById('auto_capacity_info');
+    const capacityInput = document.getElementById('capacity');
+    const capacityModeBadge = document.getElementById('capacity-mode-badge');
+    
+    if (autoMode) {
+        manualInput.style.display = 'none';
+        autoInfo.style.display = 'block';
+        capacityInput.removeAttribute('required');
+        capacityInput.value = ''; // Clear manual value
+        if (capacityModeBadge) capacityModeBadge.textContent = 'Automatic';
+    } else {
+        manualInput.style.display = 'block';
+        autoInfo.style.display = 'none';
+        capacityInput.setAttribute('required', 'required');
+        if (capacityModeBadge) capacityModeBadge.textContent = 'Manual';
+    }
 }
 
 function deleteSchedule(scheduleId) {
@@ -503,21 +989,27 @@ function deleteSchedule(scheduleId) {
     new bootstrap.Modal(document.getElementById('deleteModal')).show();
 }
 
-function updateCapacity() {
-    const venueSelect = document.getElementById('venueId');
-    const capacityInput = document.getElementById('capacity');
-    const selectedOption = venueSelect.options[venueSelect.selectedIndex];
-    
-    if (selectedOption && selectedOption.dataset.capacity) {
-        const maxCapacity = parseInt(selectedOption.dataset.capacity);
-        capacityInput.max = maxCapacity;
-        
-        // If current value exceeds max, reset it
-        if (capacityInput.value && parseInt(capacityInput.value) > maxCapacity) {
-            capacityInput.value = maxCapacity;
-        }
+// Event listeners
+document.addEventListener('DOMContentLoaded', function() {
+    const examSelect = document.getElementById('examId');
+    if (examSelect) {
+        examSelect.addEventListener('change', updateEnrollmentInfo);
     }
-}
+});
+
+// Form submission validation
+document.addEventListener('DOMContentLoaded', function() {
+    const form = document.getElementById('scheduleForm');
+    if (form) {
+        form.addEventListener('submit', function(e) {
+            if (selectedVenues.length === 0) {
+                e.preventDefault();
+                alert('Please select at least one venue.');
+                return false;
+            }
+        });
+    }
+});
 </script>
 
 <?php include '../includes/footer.php'; ?>

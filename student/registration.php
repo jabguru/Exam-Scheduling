@@ -86,27 +86,41 @@ try {
                         e.duration_minutes,
                         e.total_marks,
                         e.instructions,
-                        es.exam_date,
-                        es.start_time,
-                        es.end_time,
-                        v.venue_name,
-                        v.location,
                         sce.enrollment_date,
+                        (SELECT MIN(exam_date) FROM exam_schedules WHERE exam_id = e.exam_id) as exam_date,
+                        (SELECT MIN(start_time) FROM exam_schedules WHERE exam_id = e.exam_id) as start_time,
+                        (SELECT MIN(end_time) FROM exam_schedules WHERE exam_id = e.exam_id) as end_time,
+                        (SELECT GROUP_CONCAT(DISTINCT v.venue_name ORDER BY v.venue_name SEPARATOR ', ') 
+                         FROM exam_schedules es 
+                         JOIN venues v ON es.venue_id = v.venue_id 
+                         WHERE es.exam_id = e.exam_id) as venue_names,
+                        (SELECT GROUP_CONCAT(DISTINCT v.location ORDER BY v.venue_name SEPARATOR ', ') 
+                         FROM exam_schedules es 
+                         JOIN venues v ON es.venue_id = v.venue_id 
+                         WHERE es.exam_id = e.exam_id) as venue_locations,
+                        (SELECT seat_number FROM student_venue_assignments sva2 
+                         WHERE sva2.student_id = sce.student_id 
+                         AND sva2.schedule_id IN (SELECT schedule_id FROM exam_schedules WHERE exam_id = e.exam_id)
+                         LIMIT 1) as seat_number,
+                        (SELECT av.venue_name FROM student_venue_assignments sva3
+                         JOIN exam_schedules es3 ON sva3.schedule_id = es3.schedule_id
+                         JOIN venues av ON es3.venue_id = av.venue_id
+                         WHERE sva3.student_id = sce.student_id 
+                         AND es3.exam_id = e.exam_id
+                         LIMIT 1) as assigned_venue,
                         CASE 
-                            WHEN es.exam_date IS NULL THEN 'Not Scheduled'
-                            WHEN es.exam_date < CURDATE() THEN 'Completed'
-                            WHEN es.exam_date = CURDATE() THEN 'Today'
+                            WHEN (SELECT MIN(exam_date) FROM exam_schedules WHERE exam_id = e.exam_id) IS NULL THEN 'Not Scheduled'
+                            WHEN (SELECT MIN(exam_date) FROM exam_schedules WHERE exam_id = e.exam_id) < CURDATE() THEN 'Completed'
+                            WHEN (SELECT MIN(exam_date) FROM exam_schedules WHERE exam_id = e.exam_id) = CURDATE() THEN 'Today'
                             ELSE 'Upcoming'
                         END as exam_status
                        FROM student_course_enrollments sce
                        JOIN courses c ON sce.course_id = c.course_id
                        LEFT JOIN examinations e ON c.course_id = e.course_id AND sce.exam_period_id = e.exam_period_id
-                       LEFT JOIN exam_schedules es ON e.exam_id = es.exam_id
-                       LEFT JOIN venues v ON es.venue_id = v.venue_id
                        WHERE sce.student_id = :student_id 
                        AND sce.status = 'Registered'
                        AND sce.exam_period_id = :exam_period_id
-                       ORDER BY es.exam_date, es.start_time, c.course_code";
+                       ORDER BY exam_date, start_time, c.course_code";
         $examsStmt = $db->prepare($examsQuery);
         $examsStmt->bindParam(':student_id', $student['student_id']);
         $examsStmt->bindParam(':exam_period_id', $currentPeriod['exam_period_id']);
@@ -243,13 +257,27 @@ include '../includes/header.php';
                                                 <?php endif; ?>
                                             </td>
                                             <td>
-                                                <?php if ($exam['venue_name']): ?>
-                                                <strong><?php echo htmlspecialchars($exam['venue_name']); ?></strong>
-                                                <?php if ($exam['location']): ?>
-                                                <br><small class="text-muted"><?php echo htmlspecialchars($exam['location']); ?></small>
+                                                <?php if ($exam['venue_names']): ?>
+                                                <div>
+                                                    <strong>All Venues:</strong> <?php echo htmlspecialchars($exam['venue_names']); ?>
+                                                    <?php if ($exam['venue_locations']): ?>
+                                                    <br><small class="text-muted"><?php echo htmlspecialchars($exam['venue_locations']); ?></small>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <?php if ($exam['assigned_venue']): ?>
+                                                <div class="mt-2">
+                                                    <strong class="text-success">Your Assigned Venue:</strong> <?php echo htmlspecialchars($exam['assigned_venue']); ?>
+                                                    <?php if ($exam['seat_number']): ?>
+                                                    <br><small class="text-success">Seat: <?php echo htmlspecialchars($exam['seat_number']); ?></small>
+                                                    <?php endif; ?>
+                                                </div>
+                                                <?php else: ?>
+                                                <div class="mt-2">
+                                                    <span class="text-warning"><i class="fas fa-clock"></i> Venue assignment pending</span>
+                                                </div>
                                                 <?php endif; ?>
                                                 <?php else: ?>
-                                                <span class="text-warning">Not assigned</span>
+                                                <span class="text-warning">Not scheduled</span>
                                                 <?php endif; ?>
                                             </td>
                                             <td>
