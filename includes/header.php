@@ -49,6 +49,13 @@
                     </li>
                     <?php endif; ?>
                     
+                    <!-- Timetable Link for All Users -->
+                    <li class="nav-item">
+                        <a class="nav-link" href="/Exam-Scheduling/timetable.php">
+                            <i class="fas fa-table"></i> Exam Timetable
+                        </a>
+                    </li>
+                    
                     <?php if (hasRole('Lecturer')): ?>
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
