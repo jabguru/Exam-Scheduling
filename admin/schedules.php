@@ -168,7 +168,7 @@ try {
     
     // Get schedules
     $query = "SELECT es.*, e.exam_id, e.exam_type, c.course_code, c.course_title, c.academic_level,
-                     v.venue_name, v.max_capacity, d.department_name,
+                     v.venue_name, v.capacity as max_capacity, d.department_name,
                      COUNT(DISTINCT er.registration_id) as registered_students
               FROM exam_schedules es 
               JOIN examinations e ON es.exam_id = e.exam_id
@@ -407,8 +407,8 @@ include '../includes/header.php';
                             <select class="form-control" id="venueId" name="venue_id" required onchange="updateCapacity()">
                                 <option value="">Select Venue</option>
                                 <?php foreach ($venues as $venue): ?>
-                                <option value="<?php echo $venue['venue_id']; ?>" data-capacity="<?php echo $venue['max_capacity']; ?>">
-                                    <?php echo htmlspecialchars($venue['venue_name'] . ' (Max: ' . $venue['max_capacity'] . ')'); ?>
+                                <option value="<?php echo $venue['venue_id']; ?>" data-capacity="<?php echo $venue['capacity']; ?>">
+                                    <?php echo htmlspecialchars($venue['venue_name'] . ' (Max: ' . $venue['capacity'] . ')'); ?>
                                 </option>
                                 <?php endforeach; ?>
                             </select>

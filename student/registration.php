@@ -4,7 +4,7 @@ require_once '../includes/functions.php';
 
 requireRole('Student');
 
-$pageTitle = "Exam Registration";
+$pageTitle = "My Examinations";
 
 // Get student information
 try {
@@ -23,391 +23,311 @@ try {
     $student = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$student) {
-        throw new Exception('Student profile not found.');
-    }
-    
-} catch (Exception $e) {
-    setAlert('danger', 'Error: ' . $e->getMessage());
-    header("Location: dashboard.php");
-    exit();
-}
-
-// Handle exam registration
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!validateCSRFToken($_POST['csrf_token'] ?? '')) {
-        setAlert('danger', 'Invalid request. Please try again.');
-    } else {
-        $action = $_POST['action'] ?? '';
+        // User has student role but no student record - create one
+        $year = date('Y');
+        $randomNumber = str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT);
+        $matricNumber = $year . $randomNumber;
         
-        try {
-            if ($action === 'register') {
-                $examId = intval($_POST['exam_id']);
-                
-                // Check if already registered
-                $checkQuery = "SELECT COUNT(*) as count FROM exam_registrations 
-                              WHERE exam_id = :exam_id AND student_id = :student_id";
-                $checkStmt = $db->prepare($checkQuery);
-                $checkStmt->bindParam(':exam_id', $examId);
-                $checkStmt->bindParam(':student_id', $student['student_id']);
-                $checkStmt->execute();
-                
-                if ($checkStmt->fetch(PDO::FETCH_ASSOC)['count'] > 0) {
-                    setAlert('warning', 'You are already registered for this exam.');
-                } else {
-                    // Check registration deadline
-                    $deadlineQuery = "SELECT e.exam_id, c.course_code, es.exam_date, es.start_time
-                                     FROM examinations e
-                                     JOIN courses c ON e.course_id = c.course_id
-                                     JOIN exam_schedules es ON e.exam_id = es.exam_id
-                                     WHERE e.exam_id = :exam_id AND es.exam_date > CURDATE()";
-                    $deadlineStmt = $db->prepare($deadlineQuery);
-                    $deadlineStmt->bindParam(':exam_id', $examId);
-                    $deadlineStmt->execute();
-                    $examInfo = $deadlineStmt->fetch(PDO::FETCH_ASSOC);
-                    
-                    if (!$examInfo) {
-                        setAlert('danger', 'Registration deadline has passed or exam not found.');
-                    } else {
-                        // Register for exam
-                        $registerQuery = "INSERT INTO exam_registrations (exam_id, student_id, registration_date, status) 
-                                         VALUES (:exam_id, :student_id, NOW(), 'Registered')";
-                        $registerStmt = $db->prepare($registerQuery);
-                        $registerStmt->bindParam(':exam_id', $examId);
-                        $registerStmt->bindParam(':student_id', $student['student_id']);
-                        $registerStmt->execute();
-                        
-                        setAlert('success', "Successfully registered for {$examInfo['course_code']} exam.");
-                    }
-                }
-            } elseif ($action === 'cancel') {
-                $registrationId = intval($_POST['registration_id']);
-                
-                // Check if can cancel (exam must be at least 24 hours away)
-                $cancelQuery = "SELECT er.registration_id, c.course_code, es.exam_date, es.start_time
-                               FROM exam_registrations er
-                               JOIN examinations e ON er.exam_id = e.exam_id
-                               JOIN courses c ON e.course_id = c.course_id
-                               JOIN exam_schedules es ON e.exam_id = es.exam_id
-                               WHERE er.registration_id = :registration_id 
-                               AND er.student_id = :student_id
-                               AND CONCAT(es.exam_date, ' ', es.start_time) > DATE_ADD(NOW(), INTERVAL 24 HOUR)";
-                $cancelStmt = $db->prepare($cancelQuery);
-                $cancelStmt->bindParam(':registration_id', $registrationId);
-                $cancelStmt->bindParam(':student_id', $student['student_id']);
-                $cancelStmt->execute();
-                $canCancel = $cancelStmt->fetch(PDO::FETCH_ASSOC);
-                
-                if (!$canCancel) {
-                    setAlert('danger', 'Cannot cancel registration. Exam is less than 24 hours away.');
-                } else {
-                    $deleteQuery = "DELETE FROM exam_registrations WHERE registration_id = :registration_id";
-                    $deleteStmt = $db->prepare($deleteQuery);
-                    $deleteStmt->bindParam(':registration_id', $registrationId);
-                    $deleteStmt->execute();
-                    
-                    setAlert('success', "Registration cancelled for {$canCancel['course_code']} exam.");
-                }
+        // Check if matric number already exists and regenerate if needed
+        do {
+            $checkMatric = $db->prepare("SELECT COUNT(*) FROM students WHERE matric_number = ?");
+            $checkMatric->execute([$matricNumber]);
+            if ($checkMatric->fetchColumn() > 0) {
+                $randomNumber = str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT);
+                $matricNumber = $year . $randomNumber;
+            } else {
+                break;
             }
-        } catch (Exception $e) {
-            setAlert('danger', 'Error: ' . $e->getMessage());
+        } while (true);
+        
+        // Get first available department
+        $defaultDeptQuery = "SELECT department_id FROM departments ORDER BY department_id LIMIT 1";
+        $defaultDeptStmt = $db->query($defaultDeptQuery);
+        $defaultDepartmentId = $defaultDeptStmt->fetchColumn();
+        
+        if ($defaultDepartmentId) {
+            // Create student record
+            $createStudentQuery = "INSERT INTO students (user_id, matric_number, department_id, academic_level, current_semester, entry_year) 
+                                  VALUES (:user_id, :matric_number, :department_id, '100', 'First', :entry_year)";
+            $createStmt = $db->prepare($createStudentQuery);
+            $createStmt->bindParam(':user_id', $_SESSION['user_id']);
+            $createStmt->bindParam(':matric_number', $matricNumber);
+            $createStmt->bindParam(':department_id', $defaultDepartmentId);
+            $createStmt->bindParam(':entry_year', $year);
+            $createStmt->execute();
+            
+            // Now fetch the student record again
+            $stmt->execute();
+            $student = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            setAlert('success', 'Student profile created automatically. Matric Number: ' . $matricNumber);
+        }
+        
+        if (!$student) {
+            throw new Exception('Unable to create student profile. Please contact administrator.');
         }
     }
     
-    header("Location: registration.php");
-    exit();
+    // Get current exam period
+    $currentPeriodQuery = "SELECT * FROM exam_periods WHERE is_active = 1 ORDER BY start_date DESC LIMIT 1";
+    $currentPeriodStmt = $db->query($currentPeriodQuery);
+    $currentPeriod = $currentPeriodStmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$currentPeriod) {
+        $error = "No active exam period found. Please contact administrator.";
+    } else {
+        // Get examinations for courses student is enrolled in
+        $examsQuery = "SELECT 
+                        c.course_code,
+                        c.course_title,
+                        c.credit_units,
+                        e.exam_id,
+                        e.exam_type,
+                        e.duration_minutes,
+                        e.total_marks,
+                        e.instructions,
+                        es.exam_date,
+                        es.start_time,
+                        es.end_time,
+                        v.venue_name,
+                        v.location,
+                        sce.enrollment_date,
+                        CASE 
+                            WHEN es.exam_date IS NULL THEN 'Not Scheduled'
+                            WHEN es.exam_date < CURDATE() THEN 'Completed'
+                            WHEN es.exam_date = CURDATE() THEN 'Today'
+                            ELSE 'Upcoming'
+                        END as exam_status
+                       FROM student_course_enrollments sce
+                       JOIN courses c ON sce.course_id = c.course_id
+                       LEFT JOIN examinations e ON c.course_id = e.course_id AND sce.exam_period_id = e.exam_period_id
+                       LEFT JOIN exam_schedules es ON e.exam_id = es.exam_id
+                       LEFT JOIN venues v ON es.venue_id = v.venue_id
+                       WHERE sce.student_id = :student_id 
+                       AND sce.status = 'Registered'
+                       AND sce.exam_period_id = :exam_period_id
+                       ORDER BY es.exam_date, es.start_time, c.course_code";
+        $examsStmt = $db->prepare($examsQuery);
+        $examsStmt->bindParam(':student_id', $student['student_id']);
+        $examsStmt->bindParam(':exam_period_id', $currentPeriod['exam_period_id']);
+        $examsStmt->execute();
+        $examinations = $examsStmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+
+} catch (Exception $e) {
+    setAlert('danger', 'Error: ' . $e->getMessage());
+    $examinations = [];
 }
-
-// Get available courses for registration (courses for student's level and department)
-$availableQuery = "SELECT 
-                    e.exam_id,
-                    c.course_code,
-                    c.course_title,
-                    c.credit_units,
-                    c.academic_level,
-                    c.semester,
-                    e.exam_type,
-                    es.exam_date,
-                    es.start_time,
-                    es.end_time,
-                    v.venue_name,
-                    es.capacity_allocated,
-                    COUNT(er.registration_id) as registered_count
-                   FROM examinations e
-                   JOIN courses c ON e.course_id = c.course_id
-                   JOIN exam_schedules es ON e.exam_id = es.exam_id
-                   JOIN venues v ON es.venue_id = v.venue_id
-                   LEFT JOIN exam_registrations er ON e.exam_id = er.exam_id
-                   WHERE c.department_id = :department_id
-                   AND c.academic_level <= :student_level
-                   AND es.exam_date > CURDATE()
-                   AND e.exam_id NOT IN (
-                       SELECT exam_id FROM exam_registrations 
-                       WHERE student_id = :student_id
-                   )
-                   GROUP BY e.exam_id
-                   ORDER BY es.exam_date, es.start_time";
-
-$availableStmt = $db->prepare($availableQuery);
-$availableStmt->bindParam(':department_id', $student['department_id']);
-$availableStmt->bindParam(':student_level', $student['academic_level']);
-$availableStmt->bindParam(':student_id', $student['student_id']);
-$availableStmt->execute();
-$availableExams = $availableStmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Get current registrations
-$registeredQuery = "SELECT 
-                     er.registration_id,
-                     er.registration_date,
-                     er.status,
-                     c.course_code,
-                     c.course_title,
-                     e.exam_type,
-                     es.exam_date,
-                     es.start_time,
-                     es.end_time,
-                     v.venue_name,
-                     CASE 
-                         WHEN CONCAT(es.exam_date, ' ', es.start_time) > DATE_ADD(NOW(), INTERVAL 24 HOUR) THEN 1
-                         ELSE 0
-                     END as can_cancel
-                    FROM exam_registrations er
-                    JOIN examinations e ON er.exam_id = e.exam_id
-                    JOIN courses c ON e.course_id = c.course_id
-                    JOIN exam_schedules es ON e.exam_id = es.exam_id
-                    JOIN venues v ON es.venue_id = v.venue_id
-                    WHERE er.student_id = :student_id
-                    ORDER BY es.exam_date, es.start_time";
-
-$registeredStmt = $db->prepare($registeredQuery);
-$registeredStmt->bindParam(':student_id', $student['student_id']);
-$registeredStmt->execute();
-$registeredExams = $registeredStmt->fetchAll(PDO::FETCH_ASSOC);
-
-$csrfToken = generateCSRFToken();
 
 include '../includes/header.php';
 ?>
 
-<div class="row">
-    <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1><i class="fas fa-clipboard-list"></i> Exam Registration</h1>
-            <a href="dashboard.php" class="btn btn-outline-secondary">
-                <i class="fas fa-arrow-left"></i> Back to Dashboard
-            </a>
-        </div>
-    </div>
-</div>
-
-<!-- Student Info -->
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-body">
-                <div class="row">
-                    <div class="col-md-3">
-                        <strong>Matric Number:</strong><br>
-                        <span class="text-primary"><?php echo htmlspecialchars($student['matric_number']); ?></span>
-                    </div>
-                    <div class="col-md-3">
-                        <strong>Name:</strong><br>
-                        <?php echo htmlspecialchars($student['first_name'] . ' ' . $student['last_name']); ?>
-                    </div>
-                    <div class="col-md-3">
-                        <strong>Department:</strong><br>
-                        <?php echo htmlspecialchars($student['department_name']); ?>
-                    </div>
-                    <div class="col-md-3">
-                        <strong>Level:</strong><br>
-                        <?php echo htmlspecialchars($student['academic_level']); ?>
+<div class="container-fluid">
+    <div class="row">
+        <main class="col-12 px-md-4">
+            <div class="d-flex justify-content-between flex-wrap flex-md-nowrap align-items-center pt-3 pb-2 mb-3 border-bottom">
+                <h1 class="h2">My Examinations</h1>
+                <div class="btn-toolbar mb-2 mb-md-0">
+                    <div class="btn-group me-2">
+                        <span class="badge bg-info"><?php echo htmlspecialchars($student['matric_number']); ?></span>
+                        <span class="badge bg-secondary"><?php echo htmlspecialchars($student['academic_level']); ?> Level</span>
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
-</div>
 
-<!-- Current Registrations -->
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h5><i class="fas fa-list-check"></i> Your Registered Exams (<?php echo count($registeredExams); ?>)</h5>
+            <?php if (isset($error)): ?>
+            <div class="alert alert-danger">
+                <i class="fas fa-exclamation-triangle"></i> <?php echo $error; ?>
             </div>
-            <div class="card-body">
-                <?php if (!empty($registeredExams)): ?>
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>Course</th>
-                                <th>Exam Type</th>
-                                <th>Date & Time</th>
-                                <th>Venue</th>
-                                <th>Status</th>
-                                <th>Registered</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($registeredExams as $exam): ?>
-                            <tr>
-                                <td>
-                                    <strong><?php echo htmlspecialchars($exam['course_code']); ?></strong><br>
-                                    <small class="text-muted"><?php echo htmlspecialchars($exam['course_title']); ?></small>
-                                </td>
-                                <td>
-                                    <span class="badge <?php echo $exam['exam_type'] === 'Final' ? 'bg-primary' : 'bg-secondary'; ?>">
-                                        <?php echo htmlspecialchars($exam['exam_type']); ?>
+            <?php else: ?>
+            
+            <!-- Exam Period Info -->
+            <div class="row mb-4">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="card-title mb-0">Current Exam Period: <?php echo htmlspecialchars($currentPeriod['period_name']); ?></h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-4">
+                                    <strong>Period:</strong> <?php echo date('M j, Y', strtotime($currentPeriod['start_date'])); ?> - 
+                                    <?php echo date('M j, Y', strtotime($currentPeriod['end_date'])); ?>
+                                </div>
+                                <div class="col-md-4">
+                                    <strong>Registration Deadline:</strong> 
+                                    <span class="text-<?php echo strtotime($currentPeriod['registration_deadline']) > time() ? 'success' : 'danger'; ?>">
+                                        <?php echo date('M j, Y', strtotime($currentPeriod['registration_deadline'])); ?>
                                     </span>
-                                </td>
-                                <td>
-                                    <?php echo date('M j, Y', strtotime($exam['exam_date'])); ?><br>
-                                    <small class="text-muted">
-                                        <?php echo date('g:i A', strtotime($exam['start_time'])); ?> - 
-                                        <?php echo date('g:i A', strtotime($exam['end_time'])); ?>
-                                    </small>
-                                </td>
-                                <td><?php echo htmlspecialchars($exam['venue_name']); ?></td>
-                                <td>
-                                    <span class="badge bg-success"><?php echo htmlspecialchars($exam['status']); ?></span>
-                                </td>
-                                <td>
-                                    <small class="text-muted"><?php echo date('M j, Y', strtotime($exam['registration_date'])); ?></small>
-                                </td>
-                                <td>
-                                    <?php if ($exam['can_cancel']): ?>
-                                    <button type="button" class="btn btn-sm btn-outline-danger" 
-                                            onclick="cancelRegistration(<?php echo $exam['registration_id']; ?>)">
-                                        <i class="fas fa-times"></i> Cancel
-                                    </button>
-                                    <?php else: ?>
-                                    <span class="text-muted small">Cannot cancel</span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
+                                </div>
+                                <div class="col-md-4">
+                                    <strong>Total Examinations:</strong> <?php echo count(array_filter($examinations, function($exam) { return !is_null($exam['exam_id']); })); ?>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
-                <?php else: ?>
-                <div class="text-center py-4">
-                    <i class="fas fa-clipboard-list fa-3x text-muted mb-3"></i>
-                    <p class="text-muted">You have not registered for any exams yet.</p>
-                </div>
-                <?php endif; ?>
             </div>
-        </div>
+
+            <!-- Examinations Table -->
+            <div class="row">
+                <div class="col-12">
+                    <div class="card">
+                        <div class="card-header">
+                            <h5 class="card-title mb-0">
+                                <i class="fas fa-clipboard-list"></i> Examinations Based on Course Enrollment
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <?php if (empty($examinations)): ?>
+                            <div class="text-center py-4">
+                                <i class="fas fa-book fa-3x text-muted mb-3"></i>
+                                <p class="text-muted">You are not enrolled in any courses for this exam period.</p>
+                                <a href="enrollment.php" class="btn btn-primary">
+                                    <i class="fas fa-plus"></i> Enroll in Courses
+                                </a>
+                            </div>
+                            <?php else: ?>
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle"></i> 
+                                <strong>Note:</strong> You are automatically scheduled for examinations of all courses you are enrolled in. 
+                                No manual registration required.
+                            </div>
+                            
+                            <div class="table-responsive">
+                                <table class="table table-hover">
+                                    <thead class="table-light">
+                                        <tr>
+                                            <th>Course</th>
+                                            <th>Exam Type</th>
+                                            <th>Date & Time</th>
+                                            <th>Duration</th>
+                                            <th>Venue</th>
+                                            <th>Status</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <?php foreach ($examinations as $exam): ?>
+                                        <tr>
+                                            <td>
+                                                <strong><?php echo htmlspecialchars($exam['course_code']); ?></strong>
+                                                <br><small class="text-muted"><?php echo htmlspecialchars($exam['course_title']); ?></small>
+                                                <br><small class="text-info"><?php echo $exam['credit_units']; ?> Units</small>
+                                            </td>
+                                            <td>
+                                                <?php if ($exam['exam_type']): ?>
+                                                <span class="badge bg-<?php echo $exam['exam_type'] === 'Final' ? 'primary' : ($exam['exam_type'] === 'CA' ? 'info' : 'warning'); ?>">
+                                                    <?php echo htmlspecialchars($exam['exam_type']); ?>
+                                                </span>
+                                                <br><small class="text-muted"><?php echo $exam['total_marks']; ?> marks</small>
+                                                <?php else: ?>
+                                                <span class="text-muted">Not created yet</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <?php if ($exam['exam_date']): ?>
+                                                <strong><?php echo date('M j, Y', strtotime($exam['exam_date'])); ?></strong>
+                                                <br><small class="text-muted">
+                                                    <?php echo date('g:i A', strtotime($exam['start_time'])); ?> - 
+                                                    <?php echo date('g:i A', strtotime($exam['end_time'])); ?>
+                                                </small>
+                                                <?php else: ?>
+                                                <span class="text-warning">Not scheduled</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <?php if ($exam['duration_minutes']): ?>
+                                                <?php echo $exam['duration_minutes']; ?> minutes
+                                                <?php else: ?>
+                                                <span class="text-muted">-</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <?php if ($exam['venue_name']): ?>
+                                                <strong><?php echo htmlspecialchars($exam['venue_name']); ?></strong>
+                                                <?php if ($exam['location']): ?>
+                                                <br><small class="text-muted"><?php echo htmlspecialchars($exam['location']); ?></small>
+                                                <?php endif; ?>
+                                                <?php else: ?>
+                                                <span class="text-warning">Not assigned</span>
+                                                <?php endif; ?>
+                                            </td>
+                                            <td>
+                                                <?php 
+                                                $statusColors = [
+                                                    'Not Scheduled' => 'warning',
+                                                    'Upcoming' => 'primary',
+                                                    'Today' => 'success',
+                                                    'Completed' => 'secondary'
+                                                ];
+                                                $statusColor = $statusColors[$exam['exam_status']] ?? 'secondary';
+                                                ?>
+                                                <span class="badge bg-<?php echo $statusColor; ?>">
+                                                    <?php echo $exam['exam_status']; ?>
+                                                </span>
+                                                <?php if ($exam['exam_status'] === 'Today'): ?>
+                                                <br><small class="text-success"><strong>Exam Day!</strong></small>
+                                                <?php elseif ($exam['exam_status'] === 'Upcoming' && $exam['exam_date']): ?>
+                                                <br><small class="text-muted">
+                                                    <?php 
+                                                    $days = floor((strtotime($exam['exam_date']) - time()) / (60*60*24));
+                                                    echo $days . ' day' . ($days != 1 ? 's' : '') . ' left';
+                                                    ?>
+                                                </small>
+                                                <?php endif; ?>
+                                            </td>
+                                        </tr>
+                                        <?php endforeach; ?>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Statistics -->
+            <?php if (!empty($examinations)): ?>
+            <div class="row mt-4">
+                <div class="col-md-3">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h5 class="text-primary"><?php echo count(array_filter($examinations, function($e) { return $e['exam_status'] === 'Upcoming'; })); ?></h5>
+                            <small class="text-muted">Upcoming Exams</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h5 class="text-warning"><?php echo count(array_filter($examinations, function($e) { return $e['exam_status'] === 'Not Scheduled'; })); ?></h5>
+                            <small class="text-muted">Not Scheduled</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h5 class="text-success"><?php echo count(array_filter($examinations, function($e) { return $e['exam_status'] === 'Today'; })); ?></h5>
+                            <small class="text-muted">Today</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="card text-center">
+                        <div class="card-body">
+                            <h5 class="text-secondary"><?php echo count(array_filter($examinations, function($e) { return $e['exam_status'] === 'Completed'; })); ?></h5>
+                            <small class="text-muted">Completed</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+            
+            <?php endif; ?>
+        </main>
     </div>
 </div>
-
-<!-- Available Exams for Registration -->
-<div class="row">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header">
-                <h5><i class="fas fa-plus-circle"></i> Available Exams for Registration (<?php echo count($availableExams); ?>)</h5>
-            </div>
-            <div class="card-body">
-                <?php if (!empty($availableExams)): ?>
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>Course</th>
-                                <th>Level</th>
-                                <th>Exam Type</th>
-                                <th>Date & Time</th>
-                                <th>Venue</th>
-                                <th>Capacity</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($availableExams as $exam): ?>
-                            <?php 
-                                $spacesLeft = $exam['capacity_allocated'] - $exam['registered_count'];
-                                $canRegister = $spacesLeft > 0;
-                            ?>
-                            <tr>
-                                <td>
-                                    <strong><?php echo htmlspecialchars($exam['course_code']); ?></strong><br>
-                                    <small class="text-muted"><?php echo htmlspecialchars($exam['course_title']); ?></small>
-                                    <br><span class="badge bg-info"><?php echo $exam['credit_units']; ?> Units</span>
-                                </td>
-                                <td>
-                                    <span class="badge bg-secondary"><?php echo $exam['academic_level']; ?></span><br>
-                                    <small class="text-muted"><?php echo $exam['semester']; ?> Semester</small>
-                                </td>
-                                <td>
-                                    <span class="badge <?php echo $exam['exam_type'] === 'Final' ? 'bg-primary' : 'bg-secondary'; ?>">
-                                        <?php echo htmlspecialchars($exam['exam_type']); ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <?php echo date('M j, Y', strtotime($exam['exam_date'])); ?><br>
-                                    <small class="text-muted">
-                                        <?php echo date('g:i A', strtotime($exam['start_time'])); ?> - 
-                                        <?php echo date('g:i A', strtotime($exam['end_time'])); ?>
-                                    </small>
-                                </td>
-                                <td><?php echo htmlspecialchars($exam['venue_name']); ?></td>
-                                <td>
-                                    <span class="badge <?php echo $canRegister ? 'bg-success' : 'bg-danger'; ?>">
-                                        <?php echo $spacesLeft; ?> / <?php echo $exam['capacity_allocated']; ?>
-                                    </span><br>
-                                    <small class="text-muted"><?php echo $exam['registered_count']; ?> registered</small>
-                                </td>
-                                <td>
-                                    <?php if ($canRegister): ?>
-                                    <button type="button" class="btn btn-sm btn-success" 
-                                            onclick="registerForExam(<?php echo $exam['exam_id']; ?>)">
-                                        <i class="fas fa-plus"></i> Register
-                                    </button>
-                                    <?php else: ?>
-                                    <span class="text-danger small">Full</span>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-                <?php else: ?>
-                <div class="text-center py-4">
-                    <i class="fas fa-calendar-times fa-3x text-muted mb-3"></i>
-                    <p class="text-muted">No exams available for registration at this time.</p>
-                </div>
-                <?php endif; ?>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Hidden forms for actions -->
-<form id="actionForm" method="POST" style="display: none;">
-    <input type="hidden" name="csrf_token" value="<?php echo $csrfToken; ?>">
-    <input type="hidden" name="action" id="actionType">
-    <input type="hidden" name="exam_id" id="actionExamId">
-    <input type="hidden" name="registration_id" id="actionRegistrationId">
-</form>
-
-<script>
-function registerForExam(examId) {
-    if (confirm('Are you sure you want to register for this exam?')) {
-        document.getElementById('actionType').value = 'register';
-        document.getElementById('actionExamId').value = examId;
-        document.getElementById('actionForm').submit();
-    }
-}
-
-function cancelRegistration(registrationId) {
-    if (confirm('Are you sure you want to cancel this registration? This action cannot be undone.')) {
-        document.getElementById('actionType').value = 'cancel';
-        document.getElementById('actionRegistrationId').value = registrationId;
-        document.getElementById('actionForm').submit();
-    }
-}
-</script>
 
 <?php include '../includes/footer.php'; ?>

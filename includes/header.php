@@ -40,6 +40,8 @@
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/users.php">User Management</a></li>
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/departments.php">Departments</a></li>
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/courses.php">Courses</a></li>
+                            <li><a class="dropdown-item" href="/Exam-Scheduling/admin/examinations.php">Examinations</a></li>
+                            <li><a class="dropdown-item" href="/Exam-Scheduling/admin/periods.php">Academic Periods</a></li>
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/venues.php">Venues</a></li>
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/schedules.php">Exam Schedules</a></li>
                         </ul>
@@ -66,13 +68,18 @@
                         </a>
                     </li>
                     <li class="nav-item">
+                        <a class="nav-link" href="/Exam-Scheduling/student/enrollment.php">
+                            <i class="fas fa-book"></i> Course Enrollment
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="/Exam-Scheduling/student/schedule.php">
                             <i class="fas fa-calendar"></i> My Schedule
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="/Exam-Scheduling/student/registration.php">
-                            <i class="fas fa-edit"></i> Registration
+                            <i class="fas fa-clipboard-list"></i> My Examinations
                         </a>
                     </li>
                     <?php endif; ?>

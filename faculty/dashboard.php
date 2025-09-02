@@ -23,7 +23,43 @@ try {
     $faculty = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$faculty) {
-        throw new Exception('Faculty profile not found.');
+        // User has faculty role but no faculty record - create one
+        $staffId = 'STAFF' . date('Y') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
+        
+        // Check if staff ID already exists and regenerate if needed
+        do {
+            $checkStaff = $db->prepare("SELECT COUNT(*) FROM faculty WHERE staff_id = ?");
+            $checkStaff->execute([$staffId]);
+            if ($checkStaff->fetchColumn() > 0) {
+                $staffId = 'STAFF' . date('Y') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
+            } else {
+                break;
+            }
+        } while (true);
+        
+        // Get first available department
+        $defaultDeptQuery = "SELECT department_id FROM departments ORDER BY department_id LIMIT 1";
+        $defaultDeptStmt = $db->query($defaultDeptQuery);
+        $defaultDepartmentId = $defaultDeptStmt->fetchColumn();
+        
+        if ($defaultDepartmentId) {
+            // Create faculty record
+            $createFacultyQuery = "INSERT INTO faculty (user_id, staff_id, department_id, designation) 
+                                  VALUES (:user_id, :staff_id, :department_id, 'Lecturer')";
+            $createStmt = $db->prepare($createFacultyQuery);
+            $createStmt->bindParam(':user_id', $_SESSION['user_id']);
+            $createStmt->bindParam(':staff_id', $staffId);
+            $createStmt->bindParam(':department_id', $defaultDepartmentId);
+            $createStmt->execute();
+            
+            // Now fetch the faculty record again
+            $stmt->execute();
+            $faculty = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+        
+        if (!$faculty) {
+            throw new Exception('Unable to create faculty profile. Please contact administrator.');
+        }
     }
     
     // Get courses taught by faculty

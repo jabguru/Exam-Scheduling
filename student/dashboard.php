@@ -23,32 +23,75 @@ try {
     $student = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$student) {
-        throw new Exception('Student profile not found.');
+        // User has student role but no student record - create one
+        $year = date('Y');
+        $randomNumber = str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT);
+        $matricNumber = $year . $randomNumber;
+        
+        // Check if matric number already exists and regenerate if needed
+        do {
+            $checkMatric = $db->prepare("SELECT COUNT(*) FROM students WHERE matric_number = ?");
+            $checkMatric->execute([$matricNumber]);
+            if ($checkMatric->fetchColumn() > 0) {
+                $randomNumber = str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT);
+                $matricNumber = $year . $randomNumber;
+            } else {
+                break;
+            }
+        } while (true);
+        
+        // Get first available department
+        $defaultDeptQuery = "SELECT department_id FROM departments ORDER BY department_id LIMIT 1";
+        $defaultDeptStmt = $db->query($defaultDeptQuery);
+        $defaultDepartmentId = $defaultDeptStmt->fetchColumn();
+        
+        if ($defaultDepartmentId) {
+            // Create student record
+            $createStudentQuery = "INSERT INTO students (user_id, matric_number, department_id, academic_level, current_semester, entry_year) 
+                                  VALUES (:user_id, :matric_number, :department_id, '100', 'First', :entry_year)";
+            $createStmt = $db->prepare($createStudentQuery);
+            $createStmt->bindParam(':user_id', $_SESSION['user_id']);
+            $createStmt->bindParam(':matric_number', $matricNumber);
+            $createStmt->bindParam(':department_id', $defaultDepartmentId);
+            $createStmt->bindParam(':entry_year', $year);
+            $createStmt->execute();
+            
+            // Now fetch the student record again
+            $stmt->execute();
+            $student = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
+        
+        if (!$student) {
+            throw new Exception('Unable to create student profile. Please contact administrator.');
+        }
     }
     
-    // Get exam statistics
-    $query = "SELECT COUNT(*) as total FROM exam_registrations er
-              JOIN examinations e ON er.exam_id = e.exam_id
-              WHERE er.student_id = :student_id";
+    // Get exam statistics - based on enrolled courses
+    $query = "SELECT COUNT(DISTINCT e.exam_id) as total 
+              FROM student_course_enrollments sce
+              JOIN examinations e ON sce.course_id = e.course_id AND sce.exam_period_id = e.exam_period_id
+              WHERE sce.student_id = :student_id AND sce.status = 'Registered'";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':student_id', $student['student_id']);
     $stmt->execute();
     $totalRegistrations = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
     
-    // Get upcoming exams
+    // Get upcoming exams based on course enrollments
     $query = "SELECT 
                 c.course_code,
                 c.course_title,
+                e.exam_type,
                 es.exam_date,
                 es.start_time,
                 es.end_time,
                 v.venue_name
-              FROM exam_registrations er
-              JOIN examinations e ON er.exam_id = e.exam_id
+              FROM student_course_enrollments sce
+              JOIN examinations e ON sce.course_id = e.course_id AND sce.exam_period_id = e.exam_period_id
               JOIN courses c ON e.course_id = c.course_id
-              JOIN exam_schedules es ON e.exam_id = es.exam_id
-              JOIN venues v ON es.venue_id = v.venue_id
-              WHERE er.student_id = :student_id 
+              LEFT JOIN exam_schedules es ON e.exam_id = es.exam_id
+              LEFT JOIN venues v ON es.venue_id = v.venue_id
+              WHERE sce.student_id = :student_id 
+              AND sce.status = 'Registered'
               AND es.exam_date >= CURDATE()
               ORDER BY es.exam_date, es.start_time
               LIMIT 5";
@@ -163,7 +206,7 @@ include '../includes/header.php';
             <div class="card-body text-center">
                 <i class="fas fa-calendar-check fa-2x text-primary mb-2"></i>
                 <h2 class="stats-number"><?php echo number_format($totalRegistrations ?? 0); ?></h2>
-                <p class="stats-label">Exam Registrations</p>
+                <p class="stats-label">Course Enrollments</p>
             </div>
         </div>
     </div>
@@ -213,17 +256,17 @@ include '../includes/header.php';
                             <i class="fas fa-calendar"></i> View Schedule
                         </a>
                     </div>
-                    <div class="col-md-3 mb-2">
+                    <div class="col-md-4 mb-2">
                         <a href="registration.php" class="btn btn-success w-100">
-                            <i class="fas fa-edit"></i> Register for Exams
+                            <i class="fas fa-clipboard-list"></i> My Examinations
                         </a>
                     </div>
-                    <div class="col-md-3 mb-2">
-                        <a href="#" class="btn btn-info w-100">
-                            <i class="fas fa-download"></i> Download Hall Ticket
+                    <div class="col-md-4 mb-2">
+                        <a href="enrollment.php" class="btn btn-info w-100">
+                            <i class="fas fa-book"></i> Course Enrollment
                         </a>
                     </div>
-                    <div class="col-md-3 mb-2">
+                    <div class="col-md-4 mb-2">
                         <a href="../profile.php" class="btn btn-secondary w-100">
                             <i class="fas fa-user-edit"></i> Update Profile
                         </a>
@@ -278,7 +321,7 @@ include '../includes/header.php';
                 <div class="text-center py-4">
                     <i class="fas fa-calendar-times fa-3x text-muted mb-3"></i>
                     <p class="text-muted">No upcoming exams scheduled</p>
-                    <a href="registration.php" class="btn btn-primary">Register for Exams</a>
+                    <a href="registration.php" class="btn btn-primary">View My Examinations</a>
                 </div>
                 <?php endif; ?>
             </div>
@@ -336,7 +379,7 @@ include '../includes/header.php';
                                 <th>Course</th>
                                 <th>Exam Date</th>
                                 <th>Status</th>
-                                <th>Attendance</th>
+                                <th>Enrollment</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -353,8 +396,8 @@ include '../includes/header.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <span class="badge status-<?php echo strtolower($exam['registration_status']); ?>">
-                                        <?php echo $exam['registration_status']; ?>
+                                    <span class="badge bg-success">
+                                        Enrolled
                                     </span>
                                 </td>
                             </tr>

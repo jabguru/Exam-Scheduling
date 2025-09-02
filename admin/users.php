@@ -67,6 +67,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 $stmt->execute();
                 
+                // If creating a new user, get the user ID and create additional records if needed
+                if ($action === 'create') {
+                    $newUserId = $db->lastInsertId();
+                    
+                    // If user is a student (role_id = 2), create student record
+                    if ($roleId == 2) {
+                        // Generate matric number (you can customize this logic)
+                        $year = date('Y');
+                        $randomNumber = str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT);
+                        $matricNumber = $year . $randomNumber;
+                        
+                        // Check if matric number already exists and regenerate if needed
+                        do {
+                            $checkMatric = $db->prepare("SELECT COUNT(*) FROM students WHERE matric_number = ?");
+                            $checkMatric->execute([$matricNumber]);
+                            if ($checkMatric->fetchColumn() > 0) {
+                                $randomNumber = str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT);
+                                $matricNumber = $year . $randomNumber;
+                            } else {
+                                break;
+                            }
+                        } while (true);
+                        
+                        // Default to first department and 100 level
+                        $defaultDeptQuery = "SELECT department_id FROM departments ORDER BY department_id LIMIT 1";
+                        $defaultDeptStmt = $db->query($defaultDeptQuery);
+                        $defaultDepartmentId = $defaultDeptStmt->fetchColumn();
+                        
+                        $studentQuery = "INSERT INTO students (user_id, matric_number, department_id, academic_level, current_semester, entry_year) 
+                                        VALUES (:user_id, :matric_number, :department_id, '100', 'First', :entry_year)";
+                        $studentStmt = $db->prepare($studentQuery);
+                        $studentStmt->bindParam(':user_id', $newUserId);
+                        $studentStmt->bindParam(':matric_number', $matricNumber);
+                        $studentStmt->bindParam(':department_id', $defaultDepartmentId);
+                        $studentStmt->bindParam(':entry_year', $year);
+                        $studentStmt->execute();
+                    }
+                    
+                    // If user is faculty (role_id = 3), create faculty record
+                    elseif ($roleId == 3) {
+                        // Generate staff ID
+                        $staffId = 'STAFF' . date('Y') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
+                        
+                        // Check if staff ID already exists and regenerate if needed
+                        do {
+                            $checkStaff = $db->prepare("SELECT COUNT(*) FROM faculty WHERE staff_id = ?");
+                            $checkStaff->execute([$staffId]);
+                            if ($checkStaff->fetchColumn() > 0) {
+                                $staffId = 'STAFF' . date('Y') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
+                            } else {
+                                break;
+                            }
+                        } while (true);
+                        
+                        // Default to first department
+                        $defaultDeptQuery = "SELECT department_id FROM departments ORDER BY department_id LIMIT 1";
+                        $defaultDeptStmt = $db->query($defaultDeptQuery);
+                        $defaultDepartmentId = $defaultDeptStmt->fetchColumn();
+                        
+                        $facultyQuery = "INSERT INTO faculty (user_id, staff_id, department_id, designation) 
+                                        VALUES (:user_id, :staff_id, :department_id, 'Lecturer')";
+                        $facultyStmt = $db->prepare($facultyQuery);
+                        $facultyStmt->bindParam(':user_id', $newUserId);
+                        $facultyStmt->bindParam(':staff_id', $staffId);
+                        $facultyStmt->bindParam(':department_id', $defaultDepartmentId);
+                        $facultyStmt->execute();
+                    }
+                }
+                
                 setAlert('success', $action === 'create' ? 'User created successfully.' : 'User updated successfully.');
             } elseif ($action === 'delete') {
                 $userId = intval($_POST['user_id']);

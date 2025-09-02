@@ -25,7 +25,7 @@ try {
         throw new Exception('Student profile not found.');
     }
     
-        // Get exam schedule for this student
+        // Get exam schedule for this student based on course enrollments
     $query = "SELECT 
                 c.course_code,
                 c.course_title,
@@ -34,15 +34,15 @@ try {
                 es.start_time,
                 es.end_time,
                 v.venue_name,
-                v.building,
-                er.registration_date,
-                er.status
-              FROM exam_registrations er
-              JOIN examinations e ON er.exam_id = e.exam_id
+                v.location,
+                sce.enrollment_date,
+                'Enrolled' as status
+              FROM student_course_enrollments sce
+              JOIN examinations e ON sce.course_id = e.course_id AND sce.exam_period_id = e.exam_period_id
               JOIN courses c ON e.course_id = c.course_id
               LEFT JOIN exam_schedules es ON e.exam_id = es.exam_id
               LEFT JOIN venues v ON es.venue_id = v.venue_id
-              WHERE er.student_id = :student_id
+              WHERE sce.student_id = :student_id AND sce.status = 'Registered'
               ORDER BY es.exam_date, es.start_time";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':student_id', $student['student_id']);
@@ -247,7 +247,7 @@ include '../includes/header.php';
                                     
                                     <div class="mt-3 text-end">
                                         <small class="text-muted">
-                                            Registered: <?php echo formatDate($exam['registration_date']); ?>
+                                            Enrolled: <?php echo formatDate($exam['enrollment_date']); ?>
                                         </small>
                                     </div>
                                 </div>
@@ -281,9 +281,9 @@ include '../includes/header.php';
                 <div class="card-body text-center py-5">
                     <i class="fas fa-calendar-times fa-5x text-muted mb-4"></i>
                     <h4 class="text-muted">No Exams Scheduled</h4>
-                    <p class="text-muted">You haven't registered for any exams yet.</p>
+                    <p class="text-muted">You don't have any exams scheduled yet. Make sure you're enrolled in courses.</p>
                     <a href="registration.php" class="btn btn-primary">
-                        <i class="fas fa-edit"></i> Register for Exams
+                        <i class="fas fa-clipboard-list"></i> View My Examinations
                     </a>
                 </div>
             </div>
