@@ -84,6 +84,7 @@ try {
                 COUNT(DISTINCT s.student_id) as student_count,
                 COUNT(DISTINCT l.lecturer_id) as lecturer_count
               FROM departments d
+              LEFT JOIN courses c ON d.department_id = c.department_id
               LEFT JOIN students s ON d.department_id = s.department_id
               LEFT JOIN lecturers l ON d.department_id = l.department_id
               GROUP BY d.department_id
