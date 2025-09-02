@@ -90,29 +90,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             }
                         } while (true);
                         
-                        // Default to first department and 100 level
-                        $defaultDeptQuery = "SELECT department_id FROM departments ORDER BY department_id LIMIT 1";
-                        $defaultDeptStmt = $db->query($defaultDeptQuery);
-                        $defaultDepartmentId = $defaultDeptStmt->fetchColumn();
+                        // Use provided department or default to first department
+                        $departmentId = intval($_POST['department_id']) ?: null;
+                        if (!$departmentId) {
+                            $defaultDeptQuery = "SELECT department_id FROM departments ORDER BY department_id LIMIT 1";
+                            $defaultDeptStmt = $db->query($defaultDeptQuery);
+                            $departmentId = $defaultDeptStmt->fetchColumn();
+                        }
                         
                         $studentQuery = "INSERT INTO students (user_id, matric_number, department_id, academic_level, current_semester, entry_year) 
                                         VALUES (:user_id, :matric_number, :department_id, '100', 'First', :entry_year)";
                         $studentStmt = $db->prepare($studentQuery);
                         $studentStmt->bindParam(':user_id', $newUserId);
                         $studentStmt->bindParam(':matric_number', $matricNumber);
-                        $studentStmt->bindParam(':department_id', $defaultDepartmentId);
+                        $studentStmt->bindParam(':department_id', $departmentId);
                         $studentStmt->bindParam(':entry_year', $year);
                         $studentStmt->execute();
                     }
                     
-                    // If user is faculty (role_id = 3), create faculty record
+                    // If user is lecturer (role_id = 3), create lecturer record
                     elseif ($roleId == 3) {
                         // Generate staff ID
                         $staffId = 'STAFF' . date('Y') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
                         
                         // Check if staff ID already exists and regenerate if needed
                         do {
-                            $checkStaff = $db->prepare("SELECT COUNT(*) FROM faculty WHERE staff_id = ?");
+                            $checkStaff = $db->prepare("SELECT COUNT(*) FROM lecturers WHERE staff_id = ?");
                             $checkStaff->execute([$staffId]);
                             if ($checkStaff->fetchColumn() > 0) {
                                 $staffId = 'STAFF' . date('Y') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
@@ -121,18 +124,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             }
                         } while (true);
                         
-                        // Default to first department
-                        $defaultDeptQuery = "SELECT department_id FROM departments ORDER BY department_id LIMIT 1";
-                        $defaultDeptStmt = $db->query($defaultDeptQuery);
-                        $defaultDepartmentId = $defaultDeptStmt->fetchColumn();
+                        // Use provided department or default to first department
+                        $departmentId = intval($_POST['department_id']) ?: null;
+                        if (!$departmentId) {
+                            $defaultDeptQuery = "SELECT department_id FROM departments ORDER BY department_id LIMIT 1";
+                            $defaultDeptStmt = $db->query($defaultDeptQuery);
+                            $departmentId = $defaultDeptStmt->fetchColumn();
+                        }
                         
-                        $facultyQuery = "INSERT INTO faculty (user_id, staff_id, department_id, designation) 
+                        $lecturerQuery = "INSERT INTO lecturers (user_id, staff_id, department_id, designation) 
                                         VALUES (:user_id, :staff_id, :department_id, 'Lecturer')";
-                        $facultyStmt = $db->prepare($facultyQuery);
-                        $facultyStmt->bindParam(':user_id', $newUserId);
-                        $facultyStmt->bindParam(':staff_id', $staffId);
-                        $facultyStmt->bindParam(':department_id', $defaultDepartmentId);
-                        $facultyStmt->execute();
+                        $lecturerStmt = $db->prepare($lecturerQuery);
+                        $lecturerStmt->bindParam(':user_id', $newUserId);
+                        $lecturerStmt->bindParam(':staff_id', $staffId);
+                        $lecturerStmt->bindParam(':department_id', $departmentId);
+                        $lecturerStmt->execute();
                     }
                 }
                 
@@ -170,6 +176,11 @@ try {
     $roleStmt = $db->query($roleQuery);
     $roles = $roleStmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // Get departments for dropdown
+    $deptQuery = "SELECT * FROM departments ORDER BY department_name";
+    $deptStmt = $db->query($deptQuery);
+    $departments = $deptStmt->fetchAll(PDO::FETCH_ASSOC);
+    
     // Count total records
     $countQuery = "SELECT COUNT(*) as total FROM users u 
                    JOIN roles r ON u.role_id = r.role_id";
@@ -193,9 +204,23 @@ try {
     $pagination = paginate($page, $totalRecords, $recordsPerPage);
     
     // Get users
-    $query = "SELECT u.*, r.role_name 
+    $query = "SELECT u.*, r.role_name,
+                     CASE 
+                         WHEN r.role_name = 'Student' THEN sd.department_name
+                         WHEN r.role_name = 'Lecturer' THEN ld.department_name
+                         ELSE NULL
+                     END as department_name,
+                     CASE 
+                         WHEN r.role_name = 'Student' THEN s.matric_number
+                         WHEN r.role_name = 'Lecturer' THEN l.staff_id
+                         ELSE NULL
+                     END as identifier
               FROM users u 
-              JOIN roles r ON u.role_id = r.role_id" . 
+              JOIN roles r ON u.role_id = r.role_id
+              LEFT JOIN students s ON u.user_id = s.user_id AND r.role_name = 'Student'
+              LEFT JOIN departments sd ON s.department_id = sd.department_id
+              LEFT JOIN lecturers l ON u.user_id = l.user_id AND r.role_name = 'Lecturer'
+              LEFT JOIN departments ld ON l.department_id = ld.department_id" . 
               $whereClause . 
               " ORDER BY u.created_at DESC 
               LIMIT :limit OFFSET :offset";
@@ -282,6 +307,7 @@ include '../includes/header.php';
                                 <th>Name</th>
                                 <th>Email</th>
                                 <th>Role</th>
+                                <th>Department</th>
                                 <th>Status</th>
                                 <th>Created</th>
                                 <th>Actions</th>
@@ -295,6 +321,16 @@ include '../includes/header.php';
                                 <td><?php echo htmlspecialchars($user['email']); ?></td>
                                 <td>
                                     <span class="badge bg-info"><?php echo htmlspecialchars($user['role_name']); ?></span>
+                                </td>
+                                <td>
+                                    <?php if ($user['department_name']): ?>
+                                        <?php echo htmlspecialchars($user['department_name']); ?>
+                                        <?php if ($user['identifier']): ?>
+                                            <br><small class="text-muted"><?php echo htmlspecialchars($user['identifier']); ?></small>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <span class="badge status-<?php echo $user['is_active'] ? 'active' : 'inactive'; ?>">
@@ -390,18 +426,32 @@ include '../includes/header.php';
                     
                     <div class="row">
                         <div class="col-md-6 mb-3">
-                            <label for="phoneNumber" class="form-label">Phone Number</label>
-                            <input type="tel" class="form-control" id="phoneNumber" name="phone_number">
-                        </div>
-                        <div class="col-md-6 mb-3">
                             <label for="roleId" class="form-label">Role *</label>
-                            <select class="form-control" id="roleId" name="role_id" required>
+                            <select class="form-control" id="roleId" name="role_id" required onchange="toggleDepartmentField()">
                                 <option value="">Select Role</option>
                                 <?php foreach ($roles as $role): ?>
                                 <option value="<?php echo $role['role_id']; ?>"><?php echo htmlspecialchars($role['role_name']); ?></option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
+                        <div class="col-md-6 mb-3" id="departmentField" style="display: none;">
+                            <label for="departmentId" class="form-label">Department *</label>
+                            <select class="form-control" id="departmentId" name="department_id">
+                                <option value="">Select Department</option>
+                                <?php foreach ($departments as $department): ?>
+                                <option value="<?php echo $department['department_id']; ?>"><?php echo htmlspecialchars($department['department_name']); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <small class="form-text text-muted">Required for Students and Lecturers.</small>
+                        </div>
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label for="phoneNumber" class="form-label">Phone Number</label>
+                            <input type="tel" class="form-control" id="phoneNumber" name="phone_number">
+                        </div>
+                        <div class="col-md-6 mb-3"></div>
                     </div>
                     
                     <div class="mb-3">
@@ -458,6 +508,8 @@ function openUserModal() {
     document.getElementById('passwordRequired').style.display = 'inline';
     document.getElementById('passwordHelp').style.display = 'none';
     document.getElementById('password').required = true;
+    document.getElementById('departmentField').style.display = 'none';
+    document.getElementById('departmentId').required = false;
 }
 
 function editUser(user) {
@@ -475,6 +527,7 @@ function editUser(user) {
     document.getElementById('passwordHelp').style.display = 'block';
     document.getElementById('password').required = false;
     document.getElementById('password').value = '';
+    toggleDepartmentField();
     
     new bootstrap.Modal(document.getElementById('userModal')).show();
 }
@@ -482,6 +535,22 @@ function editUser(user) {
 function deleteUser(userId) {
     document.getElementById('deleteUserId').value = userId;
     new bootstrap.Modal(document.getElementById('deleteModal')).show();
+}
+
+function toggleDepartmentField() {
+    const roleSelect = document.getElementById('roleId');
+    const departmentField = document.getElementById('departmentField');
+    const departmentSelect = document.getElementById('departmentId');
+    
+    // Show department field for Student role (role_id = 2) and Lecturer role (role_id = 3)
+    if (roleSelect.value == '2' || roleSelect.value == '3') {
+        departmentField.style.display = 'block';
+        departmentSelect.required = true;
+    } else {
+        departmentField.style.display = 'none';
+        departmentSelect.required = false;
+        departmentSelect.value = '';
+    }
 }
 </script>
 

@@ -91,9 +91,9 @@ CREATE TABLE students (
     FOREIGN KEY (department_id) REFERENCES departments(department_id)
 );
 
--- Faculty table
-CREATE TABLE faculty (
-    faculty_id INT PRIMARY KEY AUTO_INCREMENT,
+-- Lecturers table
+CREATE TABLE lecturers (
+    lecturer_id INT PRIMARY KEY AUTO_INCREMENT,
     user_id INT NOT NULL UNIQUE,
     staff_id VARCHAR(50) NOT NULL UNIQUE,
     department_id INT NOT NULL,
@@ -102,6 +102,19 @@ CREATE TABLE faculty (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(user_id),
     FOREIGN KEY (department_id) REFERENCES departments(department_id)
+);
+
+-- Lecturer course assignments table (many-to-many relationship)
+CREATE TABLE lecturer_course_assignments (
+    assignment_id INT PRIMARY KEY AUTO_INCREMENT,
+    lecturer_id INT NOT NULL,
+    course_id INT NOT NULL,
+    assigned_by INT NOT NULL,
+    assigned_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (lecturer_id) REFERENCES lecturers(lecturer_id),
+    FOREIGN KEY (course_id) REFERENCES courses(course_id),
+    FOREIGN KEY (assigned_by) REFERENCES users(user_id),
+    UNIQUE KEY unique_lecturer_course (lecturer_id, course_id)
 );
 
 -- Venues table
@@ -122,15 +135,31 @@ CREATE TABLE examinations (
     exam_id INT PRIMARY KEY AUTO_INCREMENT,
     course_id INT NOT NULL,
     exam_period_id INT NOT NULL,
-    exam_type ENUM('CA', 'Final', 'Makeup') DEFAULT 'Final',
+    exam_type ENUM('CA', 'Final', 'Makeup') NOT NULL,
     duration_minutes INT NOT NULL,
     total_marks INT NOT NULL,
     instructions TEXT,
     created_by INT NOT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (course_id) REFERENCES courses(course_id),
     FOREIGN KEY (exam_period_id) REFERENCES exam_periods(exam_period_id),
-    FOREIGN KEY (created_by) REFERENCES users(user_id)
+    FOREIGN KEY (created_by) REFERENCES users(user_id),
+    UNIQUE KEY unique_course_exam (course_id, exam_period_id, exam_type)
+);
+
+-- Exam invigilator assignments table (multiple invigilators per exam)
+CREATE TABLE exam_invigilator_assignments (
+    assignment_id INT PRIMARY KEY AUTO_INCREMENT,
+    exam_id INT NOT NULL,
+    lecturer_id INT NOT NULL,
+    role_type ENUM('Chief', 'Assistant') DEFAULT 'Assistant',
+    assigned_by INT NOT NULL,
+    assigned_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (exam_id) REFERENCES examinations(exam_id) ON DELETE CASCADE,
+    FOREIGN KEY (lecturer_id) REFERENCES lecturers(lecturer_id),
+    FOREIGN KEY (assigned_by) REFERENCES users(user_id),
+    UNIQUE KEY unique_exam_lecturer (exam_id, lecturer_id)
 );
 
 -- Exam schedules table (supports multiple venues per exam)
@@ -179,26 +208,16 @@ CREATE TABLE exam_registrations (
     UNIQUE KEY unique_exam_registration (student_id, exam_id)
 );
 
--- Invigilators table
-CREATE TABLE invigilators (
-    invigilator_id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL UNIQUE,
-    availability_status ENUM('Available', 'Unavailable', 'Limited') DEFAULT 'Available',
-    max_sessions_per_day INT DEFAULT 2,
-    specialization TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(user_id)
-);
-
--- Invigilator assignments table
-CREATE TABLE invigilator_assignments (
+-- Lecturer invigilator assignments table (lecturers can be assigned to invigilate exams)
+CREATE TABLE lecturer_invigilator_assignments (
     assignment_id INT PRIMARY KEY AUTO_INCREMENT,
     schedule_id INT NOT NULL,
-    invigilator_id INT NOT NULL,
+    lecturer_id INT NOT NULL,
     role_type ENUM('Chief', 'Assistant') DEFAULT 'Assistant',
     assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (schedule_id) REFERENCES exam_schedules(schedule_id),
-    FOREIGN KEY (invigilator_id) REFERENCES invigilators(invigilator_id)
+    FOREIGN KEY (lecturer_id) REFERENCES lecturers(lecturer_id),
+    UNIQUE KEY unique_lecturer_schedule (lecturer_id, schedule_id)
 );
 
 -- Student venue assignments table (tracks which venue each student is assigned to for an exam)
@@ -217,8 +236,7 @@ CREATE TABLE student_venue_assignments (
 INSERT INTO roles (role_name, description) VALUES 
 ('Admin', 'System Administrator with full access'),
 ('Student', 'Student with access to view schedules and register for exams'),
-('Faculty', 'Faculty member with access to course management'),
-('Invigilator', 'Invigilator with access to invigilation duties');
+('Lecturer', 'Lecturer with access to course management and invigilation duties');
 
 -- Insert sample departments
 INSERT INTO departments (department_name, department_code, head_of_department) VALUES 

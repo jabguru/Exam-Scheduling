@@ -48,8 +48,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             case 'Student':
                                 header("Location: /Exam-Scheduling/student/dashboard.php");
                                 break;
-                            case 'Faculty':
-                                header("Location: /Exam-Scheduling/faculty/dashboard.php");
+                            case 'Lecturer':
+                                header("Location: /Exam-Scheduling/lecturer/dashboard.php");
                                 break;
                             default:
                                 header("Location: /Exam-Scheduling/");

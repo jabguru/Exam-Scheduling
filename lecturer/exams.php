@@ -2,28 +2,28 @@
 require_once '../config/database.php';
 require_once '../includes/functions.php';
 
-requireRole('Faculty');
+requireRole('Lecturer');
 
 $pageTitle = "Exam Management";
 
-// Get faculty information
+// Get lecturer information
 try {
     $database = new Database();
     $db = $database->getConnection();
     
-    // Get faculty details
-    $query = "SELECT f.*, d.department_name, u.first_name, u.last_name 
-              FROM faculty f 
-              JOIN departments d ON f.department_id = d.department_id
-              JOIN users u ON f.user_id = u.user_id
-              WHERE f.user_id = :user_id";
+    // Get lecturer details
+    $query = "SELECT l.*, d.department_name, u.first_name, u.last_name 
+              FROM lecturers l 
+              JOIN departments d ON l.department_id = d.department_id
+              JOIN users u ON l.user_id = u.user_id
+              WHERE l.user_id = :user_id";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':user_id', $_SESSION['user_id']);
     $stmt->execute();
-    $faculty = $stmt->fetch(PDO::FETCH_ASSOC);
+    $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if (!$faculty) {
-        throw new Exception('Faculty profile not found.');
+    if (!$lecturer) {
+        throw new Exception('Lecturer profile not found.');
     }
     
 } catch (Exception $e) {
@@ -52,14 +52,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $query = "INSERT INTO examinations (course_id, exam_type, exam_instructions, duration_minutes, total_marks, created_by) 
                              VALUES (:course_id, :exam_type, :exam_instructions, :duration_minutes, :total_marks, :created_by)";
                     $stmt = $db->prepare($query);
-                    $stmt->bindParam(':created_by', $faculty['faculty_id']);
+                    $stmt->bindParam(':created_by', $lecturer['lecturer_id']);
                 } else {
                     $query = "UPDATE examinations SET course_id = :course_id, exam_type = :exam_type, 
                              exam_instructions = :exam_instructions, duration_minutes = :duration_minutes, 
                              total_marks = :total_marks WHERE exam_id = :exam_id AND created_by = :created_by";
                     $stmt = $db->prepare($query);
                     $stmt->bindParam(':exam_id', $examId);
-                    $stmt->bindParam(':created_by', $faculty['faculty_id']);
+                    $stmt->bindParam(':created_by', $lecturer['lecturer_id']);
                 }
                 
                 $stmt->bindParam(':course_id', $courseId);
@@ -87,7 +87,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $query = "DELETE FROM examinations WHERE exam_id = :exam_id AND created_by = :created_by";
                     $stmt = $db->prepare($query);
                     $stmt->bindParam(':exam_id', $examId);
-                    $stmt->bindParam(':created_by', $faculty['faculty_id']);
+                    $stmt->bindParam(':created_by', $lecturer['lecturer_id']);
                     $stmt->execute();
                     
                     setAlert('success', 'Exam deleted successfully.');
@@ -102,22 +102,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     exit();
 }
 
-// Get courses that this faculty can create exams for (their department)
+// Get courses that this lecturer can create exams for (their department)
 $courseQuery = "SELECT * FROM courses WHERE department_id = :department_id ORDER BY course_code";
 $courseStmt = $db->prepare($courseQuery);
-$courseStmt->bindParam(':department_id', $faculty['department_id']);
+$courseStmt->bindParam(':department_id', $lecturer['department_id']);
 $courseStmt->execute();
 $courses = $courseStmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get exams created by this faculty with pagination
+// Get exams created by this lecturer with pagination
 $page = intval($_GET['page'] ?? 1);
 $search = sanitizeInput($_GET['search'] ?? '');
 $typeFilter = sanitizeInput($_GET['type'] ?? '');
 $recordsPerPage = 15;
 
 // Build where clause
-$whereConditions = ["e.created_by = :faculty_id"];
-$params = [':faculty_id' => $faculty['faculty_id']];
+$whereConditions = ["e.created_by = :lecturer_id"];
+$params = [':lecturer_id' => $lecturer['lecturer_id']];
 
 if (!empty($search)) {
     $whereConditions[] = "(c.course_code LIKE :search OR c.course_title LIKE :search)";
@@ -187,7 +187,7 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Faculty Info -->
+<!-- Lecturer Info -->
 <div class="row mb-4">
     <div class="col-12">
         <div class="card">
@@ -195,19 +195,19 @@ include '../includes/header.php';
                 <div class="row">
                     <div class="col-md-3">
                         <strong>Employee ID:</strong><br>
-                        <span class="text-primary"><?php echo htmlspecialchars($faculty['employee_id']); ?></span>
+                        <span class="text-primary"><?php echo htmlspecialchars($lecturer['employee_id']); ?></span>
                     </div>
                     <div class="col-md-3">
                         <strong>Name:</strong><br>
-                        <?php echo htmlspecialchars($faculty['first_name'] . ' ' . $faculty['last_name']); ?>
+                        <?php echo htmlspecialchars($lecturer['first_name'] . ' ' . $lecturer['last_name']); ?>
                     </div>
                     <div class="col-md-3">
                         <strong>Department:</strong><br>
-                        <?php echo htmlspecialchars($faculty['department_name']); ?>
+                        <?php echo htmlspecialchars($lecturer['department_name']); ?>
                     </div>
                     <div class="col-md-3">
                         <strong>Position:</strong><br>
-                        <?php echo htmlspecialchars($faculty['position']); ?>
+                        <?php echo htmlspecialchars($lecturer['position']); ?>
                     </div>
                 </div>
             </div>

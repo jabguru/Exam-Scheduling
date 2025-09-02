@@ -6,7 +6,7 @@ A comprehensive web-based examination timetable scheduling system built with PHP
 
 ### Core Functionality
 - **Automated Scheduling**: Intelligent algorithm for conflict-free exam timetable generation
-- **Multi-Role Access**: Role-based access control for Admin, Faculty, Students, and Invigilators
+- **Multi-Role Access**: Role-based access control for Admin, Lecturers, and Students
 - **Conflict Detection**: Real-time conflict detection and resolution
 - **Venue Management**: Comprehensive venue management with capacity tracking
 - **Student Registration**: Online exam registration system for students
@@ -21,22 +21,18 @@ A comprehensive web-based examination timetable scheduling system built with PHP
 - Automated timetable generation
 - System reports and analytics
 
-#### Faculty
+#### Lecturers
 - Course examination management
-- Student registration oversight
+- Student registration oversight  
 - Schedule review and requests
-- Department-specific reports
+- Invigilation duty management
+- Course assignment and tracking
 
 #### Students
 - View exam schedules
 - Register for examinations
 - Download hall tickets
 - Personal dashboard with exam information
-
-#### Invigilators
-- View assigned duties
-- Manage availability
-- Access exam details and student lists
 
 ## System Requirements
 
@@ -88,8 +84,12 @@ Exam-Scheduling/
 ├── config/                # Configuration files
 │   ├── database.php       # Database connection
 │   └── database_schema.sql # Database schema
-├── faculty/               # Faculty panel files
-│   ├── dashboard.php      # Faculty dashboard
+├── lecturer/               # Lecturer panel files
+│   ├── dashboard.php      # Lecturer dashboard
+│   ├── courses.php        # Course management
+│   ├── exams.php          # Exam management
+│   ├── students.php       # Student overview
+│   └── invigilation.php   # Invigilation duties
 │   └── ...
 ├── includes/              # Shared includes
 │   ├── header.php         # Common header
@@ -222,7 +222,7 @@ For issues and questions:
 - **v1.0.0**: Initial release with core functionality
   - User management system
   - Basic scheduling features
-  - Student and faculty portals
+  - Student and lecturer portals
   - Admin dashboard
 
 ## Future Enhancements

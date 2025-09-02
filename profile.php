@@ -34,10 +34,10 @@ try {
         $stmt->bindParam(':user_id', $_SESSION['user_id']);
         $stmt->execute();
         $roleSpecificInfo = $stmt->fetch(PDO::FETCH_ASSOC);
-    } elseif ($user['role_name'] === 'Faculty') {
-        $query = "SELECT f.*, d.department_name FROM faculty f 
-                  JOIN departments d ON f.department_id = d.department_id 
-                  WHERE f.user_id = :user_id";
+    } elseif ($user['role_name'] === 'Lecturer') {
+        $query = "SELECT l.*, d.department_name FROM lecturers l 
+                  JOIN departments d ON l.department_id = d.department_id 
+                  WHERE l.user_id = :user_id";
         $stmt = $db->prepare($query);
         $stmt->bindParam(':user_id', $_SESSION['user_id']);
         $stmt->execute();
@@ -211,18 +211,22 @@ include 'includes/header.php';
                             <label class="form-label">Academic Level</label>
                             <input type="text" class="form-control" value="<?php echo htmlspecialchars($roleSpecificInfo['academic_level']); ?>" readonly>
                         </div>
-                        <?php elseif ($user['role_name'] === 'Faculty'): ?>
+                        <?php elseif ($user['role_name'] === 'Lecturer'): ?>
                         <div class="col-md-4 mb-3">
-                            <label class="form-label">Employee ID</label>
-                            <input type="text" class="form-control" value="<?php echo htmlspecialchars($roleSpecificInfo['employee_id']); ?>" readonly>
+                            <label class="form-label">Staff ID</label>
+                            <input type="text" class="form-control" value="<?php echo htmlspecialchars($roleSpecificInfo['staff_id']); ?>" readonly>
                         </div>
                         <div class="col-md-4 mb-3">
                             <label class="form-label">Department</label>
                             <input type="text" class="form-control" value="<?php echo htmlspecialchars($roleSpecificInfo['department_name']); ?>" readonly>
                         </div>
                         <div class="col-md-4 mb-3">
-                            <label class="form-label">Position</label>
-                            <input type="text" class="form-control" value="<?php echo htmlspecialchars($roleSpecificInfo['position']); ?>" readonly>
+                            <label class="form-label">Designation</label>
+                            <input type="text" class="form-control" value="<?php echo htmlspecialchars($roleSpecificInfo['designation']); ?>" readonly>
+                        </div>
+                        <div class="col-md-12 mb-3">
+                            <label class="form-label">Specialization</label>
+                            <input type="text" class="form-control" value="<?php echo htmlspecialchars($roleSpecificInfo['specialization']); ?>" readonly>
                         </div>
                         <?php endif; ?>
                     </div>

@@ -94,6 +94,9 @@ function createScheduleWithMultipleVenues($db, $examId, $primaryVenueId, $examDa
     // Auto-assign students to venues
     assignStudentsToVenues($db, $examId);
     
+    // Copy invigilator assignments to schedule-specific table
+    copyInvigilatorAssignmentsToSchedules($db, $examId);
+    
     $message = count($venues) === 1 ? 
         'Schedule created successfully.' : 
         'Schedule created successfully with ' . count($venues) . ' venues to accommodate all ' . $totalStudents . ' students.';
@@ -229,6 +232,9 @@ function createScheduleWithMultipleVenuesFromForm($db, $examId, $venueIds, $exam
         // Auto-assign students to venues
         assignStudentsToVenues($db, $examId);
         
+        // Copy invigilator assignments to schedule-specific table
+        copyInvigilatorAssignmentsToSchedules($db, $examId);
+        
         $modeText = ($capacityMode === 'auto') ? 'full capacity' : $capacity . ' students per venue';
         $message = "Schedule created successfully with {$venuesCreated} venue(s) using {$modeText} for {$totalStudents} students.";
         if ($totalStudents > $totalCapacityAllocated) {
@@ -281,6 +287,62 @@ function validateExamDateWithinPeriod($db, $examId, $examDate) {
             'valid' => false,
             'message' => 'Error validating exam date: ' . $e->getMessage()
         ];
+    }
+}
+
+// Helper function to copy invigilator assignments from exam to schedule-specific table
+function copyInvigilatorAssignmentsToSchedules($db, $examId) {
+    try {
+        // Get all schedule IDs for this exam
+        $scheduleQuery = "SELECT schedule_id FROM exam_schedules WHERE exam_id = :exam_id";
+        $scheduleStmt = $db->prepare($scheduleQuery);
+        $scheduleStmt->bindParam(':exam_id', $examId);
+        $scheduleStmt->execute();
+        $schedules = $scheduleStmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (empty($schedules)) {
+            return; // No schedules found, nothing to do
+        }
+        
+        // Get all invigilator assignments for this exam
+        $invigilatorQuery = "SELECT lecturer_id, role_type FROM exam_invigilator_assignments WHERE exam_id = :exam_id";
+        $invigilatorStmt = $db->prepare($invigilatorQuery);
+        $invigilatorStmt->bindParam(':exam_id', $examId);
+        $invigilatorStmt->execute();
+        $invigilators = $invigilatorStmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (empty($invigilators)) {
+            return; // No invigilators assigned, nothing to do
+        }
+        
+        // Insert invigilator assignments for each schedule
+        $insertQuery = "INSERT INTO lecturer_invigilator_assignments (schedule_id, lecturer_id, role_type) 
+                       VALUES (:schedule_id, :lecturer_id, :role_type)";
+        $insertStmt = $db->prepare($insertQuery);
+        
+        foreach ($schedules as $schedule) {
+            foreach ($invigilators as $invigilator) {
+                // Check if assignment already exists to avoid duplicates
+                $checkQuery = "SELECT COUNT(*) FROM lecturer_invigilator_assignments 
+                              WHERE schedule_id = :schedule_id AND lecturer_id = :lecturer_id";
+                $checkStmt = $db->prepare($checkQuery);
+                $checkStmt->bindParam(':schedule_id', $schedule['schedule_id']);
+                $checkStmt->bindParam(':lecturer_id', $invigilator['lecturer_id']);
+                $checkStmt->execute();
+                
+                if ($checkStmt->fetchColumn() == 0) {
+                    // Assignment doesn't exist, create it
+                    $insertStmt->bindParam(':schedule_id', $schedule['schedule_id']);
+                    $insertStmt->bindParam(':lecturer_id', $invigilator['lecturer_id']);
+                    $insertStmt->bindParam(':role_type', $invigilator['role_type']);
+                    $insertStmt->execute();
+                }
+            }
+        }
+        
+    } catch (Exception $e) {
+        // Log error but don't break the scheduling process
+        error_log("Error copying invigilator assignments: " . $e->getMessage());
     }
 }
 

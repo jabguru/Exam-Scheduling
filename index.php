@@ -11,8 +11,8 @@ if (isLoggedIn()) {
         case 'Student':
             header("Location: /Exam-Scheduling/student/dashboard.php");
             break;
-        case 'Faculty':
-            header("Location: /Exam-Scheduling/faculty/dashboard.php");
+        case 'Lecturer':
+            header("Location: /Exam-Scheduling/lecturer/dashboard.php");
             break;
         default:
             header("Location: /Exam-Scheduling/login.php");
@@ -103,8 +103,8 @@ $pageTitle = "Welcome";
                                 <i class="fas fa-users fa-3x text-success mb-3"></i>
                                 <h4>Multi-Role Access</h4>
                                 <p class="text-muted">
-                                    Role-based access control for administrators, faculty, 
-                                    students, and invigilators with customized dashboards.
+                                    Role-based access control for administrators, lecturers, 
+                                    and students with customized dashboards.
                                 </p>
                             </div>
                         </div>

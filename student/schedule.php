@@ -98,9 +98,6 @@ include '../includes/header.php';
                 <button onclick="printSchedule()" class="btn btn-outline-primary">
                     <i class="fas fa-print"></i> Print Schedule
                 </button>
-                <button onclick="exportToCalendar()" class="btn btn-outline-success">
-                    <i class="fas fa-download"></i> Export Calendar
-                </button>
             </div>
         </div>
     </div>
@@ -179,20 +176,6 @@ include '../includes/header.php';
 <!-- Schedule Display -->
 <div id="scheduleContent">
     <?php if (!empty($examsByDate)): ?>
-    
-    <!-- Calendar View Toggle -->
-    <div class="row mb-3">
-        <div class="col-12">
-            <div class="btn-group" role="group">
-                <button type="button" class="btn btn-outline-primary active" onclick="showListView()">
-                    <i class="fas fa-list"></i> List View
-                </button>
-                <button type="button" class="btn btn-outline-primary" onclick="showCalendarView()">
-                    <i class="fas fa-calendar-alt"></i> Calendar View
-                </button>
-            </div>
-        </div>
-    </div>
     
     <!-- List View -->
     <div id="listView">
@@ -296,19 +279,6 @@ include '../includes/header.php';
         <?php endforeach; ?>
     </div>
     
-    <!-- Calendar View (Hidden by default) -->
-    <div id="calendarView" style="display: none;">
-        <div class="row">
-            <div class="col-12">
-                <div class="card">
-                    <div class="card-body">
-                        <div id="examCalendar"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    
     <?php else: ?>
     <div class="row">
         <div class="col-12">
@@ -393,42 +363,6 @@ function filterSchedule() {
     });
 }
 
-// View functions
-function showListView() {
-    document.getElementById('listView').style.display = 'block';
-    document.getElementById('calendarView').style.display = 'none';
-    
-    // Update button states
-    document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
-    event.target.closest('.btn').classList.add('active');
-}
-
-function showCalendarView() {
-    document.getElementById('listView').style.display = 'none';
-    document.getElementById('calendarView').style.display = 'block';
-    
-    // Update button states
-    document.querySelectorAll('.btn-group .btn').forEach(btn => btn.classList.remove('active'));
-    event.target.closest('.btn').classList.add('active');
-    
-    // Initialize calendar if not already done
-    if (!window.calendarInitialized) {
-        initializeCalendar();
-    }
-}
-
-function initializeCalendar() {
-    // This would require FullCalendar.js library
-    // For now, we'll show a placeholder
-    document.getElementById('examCalendar').innerHTML = 
-        '<div class="text-center py-5">' +
-        '<i class="fas fa-calendar-alt fa-3x text-muted mb-3"></i>' +
-        '<p class="text-muted">Calendar view requires FullCalendar.js library</p>' +
-        '</div>';
-    
-    window.calendarInitialized = true;
-}
-
 // Print functions
 function printSchedule() {
     window.print();
@@ -437,11 +371,6 @@ function printSchedule() {
 function printExamTicket() {
     // This would generate and print individual hall ticket
     alert('Hall ticket printing functionality would be implemented here');
-}
-
-function exportToCalendar() {
-    // This would generate an ICS file for calendar import
-    alert('Calendar export functionality would be implemented here');
 }
 
 // Add click handlers for exam cards to show details

@@ -2,36 +2,36 @@
 require_once '../config/database.php';
 require_once '../includes/functions.php';
 
-requireRole('Faculty');
+requireRole('Lecturer');
 
-$pageTitle = "Faculty Dashboard";
+$pageTitle = "Lecturer Dashboard";
 
-// Get faculty information
+// Get lecturer information
 try {
     $database = new Database();
     $db = $database->getConnection();
     
-    // Get faculty details
-    $query = "SELECT f.*, d.department_name, u.first_name, u.last_name 
-              FROM faculty f 
-              JOIN departments d ON f.department_id = d.department_id
-              JOIN users u ON f.user_id = u.user_id
-              WHERE f.user_id = :user_id";
+    // Get lecturer details
+    $query = "SELECT l.*, d.department_name, u.first_name, u.last_name 
+              FROM lecturers l 
+              JOIN departments d ON l.department_id = d.department_id
+              JOIN users u ON l.user_id = u.user_id
+              WHERE l.user_id = :user_id";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':user_id', $_SESSION['user_id']);
     $stmt->execute();
-    $faculty = $stmt->fetch(PDO::FETCH_ASSOC);
+    $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if (!$faculty) {
-        // User has faculty role but no faculty record - create one
-        $staffId = 'STAFF' . date('Y') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
+    if (!$lecturer) {
+        // User has lecturer role but no lecturer record - create one
+        $staffId = 'LEC' . date('Y') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
         
         // Check if staff ID already exists and regenerate if needed
         do {
-            $checkStaff = $db->prepare("SELECT COUNT(*) FROM faculty WHERE staff_id = ?");
+            $checkStaff = $db->prepare("SELECT COUNT(*) FROM lecturers WHERE staff_id = ?");
             $checkStaff->execute([$staffId]);
             if ($checkStaff->fetchColumn() > 0) {
-                $staffId = 'STAFF' . date('Y') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
+                $staffId = 'LEC' . date('Y') . str_pad(rand(1, 999), 3, '0', STR_PAD_LEFT);
             } else {
                 break;
             }
@@ -43,35 +43,36 @@ try {
         $defaultDepartmentId = $defaultDeptStmt->fetchColumn();
         
         if ($defaultDepartmentId) {
-            // Create faculty record
-            $createFacultyQuery = "INSERT INTO faculty (user_id, staff_id, department_id, designation) 
+            // Create lecturer record
+            $createLecturerQuery = "INSERT INTO lecturers (user_id, staff_id, department_id, designation) 
                                   VALUES (:user_id, :staff_id, :department_id, 'Lecturer')";
-            $createStmt = $db->prepare($createFacultyQuery);
+            $createStmt = $db->prepare($createLecturerQuery);
             $createStmt->bindParam(':user_id', $_SESSION['user_id']);
             $createStmt->bindParam(':staff_id', $staffId);
             $createStmt->bindParam(':department_id', $defaultDepartmentId);
             $createStmt->execute();
             
-            // Now fetch the faculty record again
+            // Now fetch the lecturer record again
             $stmt->execute();
-            $faculty = $stmt->fetch(PDO::FETCH_ASSOC);
+            $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
         }
         
-        if (!$faculty) {
-            throw new Exception('Unable to create faculty profile. Please contact administrator.');
+        if (!$lecturer) {
+            throw new Exception('Unable to create lecturer profile. Please contact administrator.');
         }
     }
     
-    // Get courses taught by faculty
+    // Get courses assigned to lecturer
     $query = "SELECT COUNT(*) as total 
-              FROM courses c 
-              WHERE c.department_id = :department_id";
+              FROM lecturer_course_assignments lca
+              JOIN courses c ON lca.course_id = c.course_id
+              WHERE lca.lecturer_id = :lecturer_id";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':department_id', $faculty['department_id']);
+    $stmt->bindParam(':lecturer_id', $lecturer['lecturer_id']);
     $stmt->execute();
     $totalCourses = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
     
-    // Get exams created by faculty
+    // Get exams created by lecturer
     $query = "SELECT COUNT(*) as total 
               FROM examinations e 
               WHERE e.created_by = :user_id";
@@ -80,17 +81,17 @@ try {
     $stmt->execute();
     $totalExams = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
     
-    // Get students in faculty's department
+    // Get students in lecturer's department
     $query = "SELECT COUNT(*) as total 
               FROM students s 
               JOIN users u ON s.user_id = u.user_id
               WHERE s.department_id = :department_id AND u.is_active = 1";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':department_id', $faculty['department_id']);
+    $stmt->bindParam(':department_id', $lecturer['department_id']);
     $stmt->execute();
     $totalStudents = $stmt->fetch(PDO::FETCH_ASSOC)['total'];
     
-    // Get upcoming exams for faculty's courses
+    // Get upcoming exams for lecturer's courses
     $query = "SELECT 
                 c.course_code,
                 c.course_title,
@@ -110,7 +111,7 @@ try {
               ORDER BY es.exam_date, es.start_time
               LIMIT 10";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':department_id', $faculty['department_id']);
+    $stmt->bindParam(':department_id', $lecturer['department_id']);
     $stmt->execute();
     $upcomingExams = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
@@ -129,11 +130,11 @@ try {
               ORDER BY latest_registration DESC
               LIMIT 5";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':department_id', $faculty['department_id']);
+    $stmt->bindParam(':department_id', $lecturer['department_id']);
     $stmt->execute();
     $recentRegistrations = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get courses in faculty's department
+    // Get courses in lecturer's department
     $query = "SELECT 
                 c.*,
                 COUNT(DISTINCT e.exam_id) as exam_count,
@@ -146,7 +147,7 @@ try {
               ORDER BY c.course_code
               LIMIT 10";
     $stmt = $db->prepare($query);
-    $stmt->bindParam(':department_id', $faculty['department_id']);
+    $stmt->bindParam(':department_id', $lecturer['department_id']);
     $stmt->execute();
     $departmentCourses = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
@@ -160,7 +161,7 @@ include '../includes/header.php';
 <div class="row">
     <div class="col-12">
         <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1><i class="fas fa-chalkboard-teacher"></i> Faculty Dashboard</h1>
+            <h1><i class="fas fa-chalkboard-teacher"></i> Lecturer Dashboard</h1>
             <div>
                 <span class="text-muted">Welcome back, Dr. <?php echo $_SESSION['first_name']; ?>!</span>
             </div>
@@ -178,30 +179,30 @@ include '../includes/header.php';
 </div>
 <?php endif; ?>
 
-<!-- Faculty Information Card -->
+<!-- Lecturer Information Card -->
 <div class="row mb-4">
     <div class="col-12">
         <div class="card">
             <div class="card-header">
-                <h5><i class="fas fa-user-tie"></i> Faculty Information</h5>
+                <h5><i class="fas fa-user-tie"></i> Lecturer Information</h5>
             </div>
             <div class="card-body">
                 <div class="row">
                     <div class="col-md-3">
                         <strong>Staff ID:</strong><br>
-                        <span class="text-primary"><?php echo htmlspecialchars($faculty['staff_id'] ?? ''); ?></span>
+                        <span class="text-primary"><?php echo htmlspecialchars($lecturer['staff_id'] ?? ''); ?></span>
                     </div>
                     <div class="col-md-3">
                         <strong>Department:</strong><br>
-                        <span><?php echo htmlspecialchars($faculty['department_name'] ?? ''); ?></span>
+                        <span><?php echo htmlspecialchars($lecturer['department_name'] ?? ''); ?></span>
                     </div>
                     <div class="col-md-3">
                         <strong>Designation:</strong><br>
-                        <span><?php echo htmlspecialchars($faculty['designation'] ?? 'Faculty Member'); ?></span>
+                        <span><?php echo htmlspecialchars($lecturer['designation'] ?? 'Lecturer Member'); ?></span>
                     </div>
                     <div class="col-md-3">
                         <strong>Specialization:</strong><br>
-                        <span><?php echo htmlspecialchars($faculty['specialization'] ?? 'General'); ?></span>
+                        <span><?php echo htmlspecialchars($lecturer['specialization'] ?? 'General'); ?></span>
                     </div>
                 </div>
             </div>

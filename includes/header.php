@@ -40,6 +40,7 @@
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/users.php">User Management</a></li>
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/departments.php">Departments</a></li>
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/courses.php">Courses</a></li>
+                            <li><a class="dropdown-item" href="/Exam-Scheduling/admin/lecturer_courses.php">Lecturer Assignments</a></li>
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/examinations.php">Examinations</a></li>
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/periods.php">Academic Periods</a></li>
                             <li><a class="dropdown-item" href="/Exam-Scheduling/admin/venues.php">Venues</a></li>
@@ -48,15 +49,17 @@
                     </li>
                     <?php endif; ?>
                     
-                    <?php if (hasRole('Faculty')): ?>
+                    <?php if (hasRole('Lecturer')): ?>
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown">
-                            <i class="fas fa-chalkboard-teacher"></i> Faculty
+                            <i class="fas fa-chalkboard-teacher"></i> Lecturer
                         </a>
                         <ul class="dropdown-menu">
-                            <li><a class="dropdown-item" href="/Exam-Scheduling/faculty/dashboard.php">Dashboard</a></li>
-                            <li><a class="dropdown-item" href="/Exam-Scheduling/faculty/exams.php">My Exams</a></li>
-                            <li><a class="dropdown-item" href="/Exam-Scheduling/faculty/students.php">Students</a></li>
+                            <li><a class="dropdown-item" href="/Exam-Scheduling/lecturer/dashboard.php">Dashboard</a></li>
+                            <li><a class="dropdown-item" href="/Exam-Scheduling/lecturer/courses.php">My Courses</a></li>
+                            <li><a class="dropdown-item" href="/Exam-Scheduling/lecturer/exams.php">My Exams</a></li>
+                            <li><a class="dropdown-item" href="/Exam-Scheduling/lecturer/students.php">Students</a></li>
+                            <li><a class="dropdown-item" href="/Exam-Scheduling/lecturer/invigilation.php">Invigilation</a></li>
                         </ul>
                     </li>
                     <?php endif; ?>

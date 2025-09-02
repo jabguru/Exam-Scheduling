@@ -2,28 +2,28 @@
 require_once '../config/database.php';
 require_once '../includes/functions.php';
 
-requireRole('Faculty');
+requireRole('Lecturer');
 
 $pageTitle = "Student Management";
 
-// Get faculty information
+// Get lecturer information
 try {
     $database = new Database();
     $db = $database->getConnection();
     
-    // Get faculty details
-    $query = "SELECT f.*, d.department_name, u.first_name, u.last_name 
-              FROM faculty f 
-              JOIN departments d ON f.department_id = d.department_id
-              JOIN users u ON f.user_id = u.user_id
-              WHERE f.user_id = :user_id";
+    // Get lecturer details
+    $query = "SELECT l.*, d.department_name, u.first_name, u.last_name 
+              FROM lecturers l 
+              JOIN departments d ON l.department_id = d.department_id
+              JOIN users u ON l.user_id = u.user_id
+              WHERE l.user_id = :user_id";
     $stmt = $db->prepare($query);
     $stmt->bindParam(':user_id', $_SESSION['user_id']);
     $stmt->execute();
-    $faculty = $stmt->fetch(PDO::FETCH_ASSOC);
+    $lecturer = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if (!$faculty) {
-        throw new Exception('Faculty profile not found.');
+    if (!$lecturer) {
+        throw new Exception('Lecturer profile not found.');
     }
     
 } catch (Exception $e) {
@@ -39,20 +39,20 @@ $levelFilter = sanitizeInput($_GET['level'] ?? '');
 $examFilter = intval($_GET['exam'] ?? 0);
 $recordsPerPage = 20;
 
-// Get exams created by this faculty for filter dropdown
+// Get exams created by this lecturer for filter dropdown
 $examQuery = "SELECT e.exam_id, c.course_code, c.course_title, e.exam_type
               FROM examinations e
               JOIN courses c ON e.course_id = c.course_id
-              WHERE e.created_by = :faculty_id
+              WHERE e.created_by = :lecturer_id
               ORDER BY c.course_code, e.exam_type";
 $examStmt = $db->prepare($examQuery);
-$examStmt->bindParam(':faculty_id', $faculty['faculty_id']);
+$examStmt->bindParam(':lecturer_id', $lecturer['lecturer_id']);
 $examStmt->execute();
-$facultyExams = $examStmt->fetchAll(PDO::FETCH_ASSOC);
+$lecturerExams = $examStmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Build where clause for students
 $whereConditions = ["s.department_id = :department_id"];
-$params = [':department_id' => $faculty['department_id']];
+$params = [':department_id' => $lecturer['department_id']];
 
 if (!empty($search)) {
     $whereConditions[] = "(s.matric_number LIKE :search OR u.first_name LIKE :search OR u.last_name LIKE :search)";
@@ -83,7 +83,7 @@ $pagination = paginate($page, $totalRecords, $recordsPerPage);
 // Get students
 $query = "SELECT s.*, u.first_name, u.last_name, u.email, u.is_active,
                  COUNT(DISTINCT er.registration_id) as total_registrations,
-                 COUNT(DISTINCT CASE WHEN e.created_by = :faculty_id THEN er.registration_id END) as faculty_exam_registrations
+                 COUNT(DISTINCT CASE WHEN e.created_by = :lecturer_id THEN er.registration_id END) as lecturer_exam_registrations
           FROM students s 
           JOIN users u ON s.user_id = u.user_id
           LEFT JOIN exam_registrations er ON s.student_id = er.student_id
@@ -97,7 +97,7 @@ $stmt = $db->prepare($query);
 foreach ($params as $key => $value) {
     $stmt->bindValue($key, $value);
 }
-$stmt->bindParam(':faculty_id', $faculty['faculty_id'], PDO::PARAM_INT);
+$stmt->bindParam(':lecturer_id', $lecturer['lecturer_id'], PDO::PARAM_INT);
 $stmt->bindParam(':limit', $recordsPerPage, PDO::PARAM_INT);
 $stmt->bindParam(':offset', $pagination['offset'], PDO::PARAM_INT);
 $stmt->execute();
@@ -136,7 +136,7 @@ include '../includes/header.php';
     </div>
 </div>
 
-<!-- Faculty Info -->
+<!-- Lecturer Info -->
 <div class="row mb-4">
     <div class="col-12">
         <div class="card">
@@ -144,19 +144,19 @@ include '../includes/header.php';
                 <div class="row">
                     <div class="col-md-3">
                         <strong>Employee ID:</strong><br>
-                        <span class="text-primary"><?php echo htmlspecialchars($faculty['employee_id']); ?></span>
+                        <span class="text-primary"><?php echo htmlspecialchars($lecturer['employee_id']); ?></span>
                     </div>
                     <div class="col-md-3">
                         <strong>Name:</strong><br>
-                        <?php echo htmlspecialchars($faculty['first_name'] . ' ' . $faculty['last_name']); ?>
+                        <?php echo htmlspecialchars($lecturer['first_name'] . ' ' . $lecturer['last_name']); ?>
                     </div>
                     <div class="col-md-3">
                         <strong>Department:</strong><br>
-                        <?php echo htmlspecialchars($faculty['department_name']); ?>
+                        <?php echo htmlspecialchars($lecturer['department_name']); ?>
                     </div>
                     <div class="col-md-3">
                         <strong>Position:</strong><br>
-                        <?php echo htmlspecialchars($faculty['position']); ?>
+                        <?php echo htmlspecialchars($lecturer['position']); ?>
                     </div>
                 </div>
             </div>
@@ -188,7 +188,7 @@ include '../includes/header.php';
                     <div class="col-md-3">
                         <select class="form-control" name="exam">
                             <option value="">All Students</option>
-                            <?php foreach ($facultyExams as $exam): ?>
+                            <?php foreach ($lecturerExams as $exam): ?>
                             <option value="<?php echo $exam['exam_id']; ?>" 
                                     <?php echo $examFilter == $exam['exam_id'] ? 'selected' : ''; ?>>
                                 <?php echo htmlspecialchars($exam['course_code'] . ' - ' . $exam['exam_type']); ?>
@@ -219,7 +219,7 @@ include '../includes/header.php';
                 <h5><i class="fas fa-clipboard-list"></i> 
                     Exam Registrations: 
                     <?php 
-                        $selectedExam = array_filter($facultyExams, function($e) use ($examFilter) {
+                        $selectedExam = array_filter($lecturerExams, function($e) use ($examFilter) {
                             return $e['exam_id'] == $examFilter;
                         });
                         $selectedExam = reset($selectedExam);
@@ -316,7 +316,7 @@ include '../includes/header.php';
                                     <span class="badge bg-primary"><?php echo $student['total_registrations']; ?></span>
                                 </td>
                                 <td>
-                                    <span class="badge bg-secondary"><?php echo $student['faculty_exam_registrations']; ?></span>
+                                    <span class="badge bg-secondary"><?php echo $student['lecturer_exam_registrations']; ?></span>
                                 </td>
                                 <td>
                                     <button type="button" class="btn btn-sm btn-outline-info" 
@@ -377,7 +377,7 @@ include '../includes/header.php';
         <div class="card stats-card">
             <div class="card-body text-center">
                 <i class="fas fa-file-alt fa-2x text-success mb-2"></i>
-                <h3 class="stats-number"><?php echo count($facultyExams); ?></h3>
+                <h3 class="stats-number"><?php echo count($lecturerExams); ?></h3>
                 <p class="stats-label">Your Exams</p>
             </div>
         </div>
@@ -388,8 +388,8 @@ include '../includes/header.php';
                 <i class="fas fa-clipboard-list fa-2x text-info mb-2"></i>
                 <h3 class="stats-number">
                     <?php 
-                        $totalFacultyRegistrations = array_sum(array_column($students, 'faculty_exam_registrations'));
-                        echo number_format($totalFacultyRegistrations);
+                        $totalLecturerRegistrations = array_sum(array_column($students, 'lecturer_exam_registrations'));
+                        echo number_format($totalLecturerRegistrations);
                     ?>
                 </h3>
                 <p class="stats-label">Exam Registrations</p>
@@ -402,7 +402,7 @@ include '../includes/header.php';
                 <i class="fas fa-percentage fa-2x text-warning mb-2"></i>
                 <h3 class="stats-number">
                     <?php 
-                        $registrationRate = $totalRecords > 0 ? round(($totalFacultyRegistrations / $totalRecords), 1) : 0;
+                        $registrationRate = $totalRecords > 0 ? round(($totalLecturerRegistrations / $totalRecords), 1) : 0;
                         echo $registrationRate;
                     ?>
                 </h3>

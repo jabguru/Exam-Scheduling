@@ -25,15 +25,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $durationMinutes = intval($_POST['duration_minutes']);
                 $totalMarks = intval($_POST['total_marks']);
                 $instructions = sanitizeInput($_POST['instructions']);
+                $invigilators = $_POST['invigilators'] ?? [];
                 $createdBy = $_SESSION['user_id'];
                 
                 if ($action === 'create') {
                     $query = "INSERT INTO examinations (course_id, exam_period_id, exam_type, duration_minutes, total_marks, instructions, created_by) 
                              VALUES (:course_id, :exam_period_id, :exam_type, :duration_minutes, :total_marks, :instructions, :created_by)";
                     $stmt = $db->prepare($query);
+                    $stmt->bindParam(':created_by', $createdBy);
                 } else {
                     $query = "UPDATE examinations SET course_id = :course_id, exam_period_id = :exam_period_id, exam_type = :exam_type, 
-                             duration_minutes = :duration_minutes, total_marks = :total_marks, instructions = :instructions 
+                             duration_minutes = :duration_minutes, total_marks = :total_marks, instructions = :instructions
                              WHERE exam_id = :exam_id";
                     $stmt = $db->prepare($query);
                     $stmt->bindParam(':exam_id', $examId);
@@ -45,12 +47,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->bindParam(':duration_minutes', $durationMinutes);
                 $stmt->bindParam(':total_marks', $totalMarks);
                 $stmt->bindParam(':instructions', $instructions);
-                if ($action === 'create') {
-                    $stmt->bindParam(':created_by', $createdBy);
-                }
                 
                 $stmt->execute();
+                
+                // Get the exam ID
+                $currentExamId = $action === 'create' ? $db->lastInsertId() : $examId;
+                
+                // Handle invigilator assignments
+                // First, remove all existing assignments for this exam
+                $deleteQuery = "DELETE FROM exam_invigilator_assignments WHERE exam_id = :exam_id";
+                $deleteStmt = $db->prepare($deleteQuery);
+                $deleteStmt->bindParam(':exam_id', $currentExamId);
+                $deleteStmt->execute();
+                
+                // Add new invigilator assignments
+                if (!empty($invigilators)) {
+                    $assignQuery = "INSERT INTO exam_invigilator_assignments (exam_id, lecturer_id, role_type, assigned_by) 
+                                   VALUES (:exam_id, :lecturer_id, :role_type, :assigned_by)";
+                    $assignStmt = $db->prepare($assignQuery);
+                    
+                    foreach ($invigilators as $invigilator) {
+                        if (!empty($invigilator['lecturer_id'])) {
+                            $assignStmt->bindParam(':exam_id', $currentExamId);
+                            $assignStmt->bindParam(':lecturer_id', $invigilator['lecturer_id']);
+                            $assignStmt->bindParam(':role_type', $invigilator['role_type']);
+                            $assignStmt->bindParam(':assigned_by', $createdBy);
+                            $assignStmt->execute();
+                        }
+                    }
+                }
+                
                 setAlert('success', 'Examination ' . ($action === 'create' ? 'created' : 'updated') . ' successfully!');
+                
                 
             } elseif ($action === 'delete') {
                 $examId = intval($_POST['exam_id']);
@@ -146,12 +174,27 @@ try {
               JOIN users u ON e.created_by = u.user_id
               LEFT JOIN exam_schedules es ON e.exam_id = es.exam_id" . 
               $whereClause . 
-              " ORDER BY e.created_at DESC
+              " GROUP BY e.exam_id
+              ORDER BY e.created_at DESC
               LIMIT $recordsPerPage OFFSET $offset";
     
     $stmt = $db->prepare($query);
     $stmt->execute($params);
     $examinations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Get invigilators for each exam
+    foreach ($examinations as &$exam) {
+        $invQuery = "SELECT eia.role_type, l.staff_id, u.first_name, u.last_name
+                     FROM exam_invigilator_assignments eia
+                     JOIN lecturers l ON eia.lecturer_id = l.lecturer_id
+                     JOIN users u ON l.user_id = u.user_id
+                     WHERE eia.exam_id = :exam_id
+                     ORDER BY eia.role_type DESC, u.first_name";
+        $invStmt = $db->prepare($invQuery);
+        $invStmt->bindParam(':exam_id', $exam['exam_id']);
+        $invStmt->execute();
+        $exam['invigilators'] = $invStmt->fetchAll(PDO::FETCH_ASSOC);
+    }
     
     // Get courses for filter dropdown
     $courseQuery = "SELECT c.*, d.department_name FROM courses c 
@@ -269,6 +312,7 @@ include '../includes/header.php';
                                     <th>Type</th>
                                     <th>Duration</th>
                                     <th>Total Marks</th>
+                                    <th>Invigilator</th>
                                     <th>Status</th>
                                     <th>Created By</th>
                                     <th>Actions</th>
@@ -296,6 +340,20 @@ include '../includes/header.php';
                                     </td>
                                     <td><?php echo $examination['duration_minutes']; ?> mins</td>
                                     <td><?php echo $examination['total_marks']; ?></td>
+                                    <td>
+                                        <?php if (!empty($examination['invigilators'])): ?>
+                                            <?php foreach ($examination['invigilators'] as $index => $invigilator): ?>
+                                                <?php if ($index > 0) echo '<br>'; ?>
+                                                <span class="badge bg-<?php echo $invigilator['role_type'] === 'Chief' ? 'primary' : 'secondary'; ?>">
+                                                    <?php echo $invigilator['role_type']; ?>
+                                                </span>
+                                                <?php echo htmlspecialchars($invigilator['first_name'] . ' ' . $invigilator['last_name']); ?>
+                                                <small class="text-muted">(<?php echo htmlspecialchars($invigilator['staff_id']); ?>)</small>
+                                            <?php endforeach; ?>
+                                        <?php else: ?>
+                                            <span class="text-muted">No invigilators assigned</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td>
                                         <span class="badge bg-<?php echo $examination['schedule_status'] === 'Scheduled' ? 'success' : 'warning'; ?>">
                                             <?php echo $examination['schedule_status']; ?>
@@ -402,6 +460,34 @@ include '../includes/header.php';
                     </div>
                     
                     <div class="mb-3">
+                        <label class="form-label">Invigilators</label>
+                        <div id="invigilatorsContainer">
+                            <div class="invigilator-row row mb-2">
+                                <div class="col-md-7">
+                                    <select class="form-control invigilator-select" name="invigilators[0][lecturer_id]">
+                                        <option value="">Select Invigilator</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <select class="form-control" name="invigilators[0][role_type]">
+                                        <option value="Chief">Chief Invigilator</option>
+                                        <option value="Assistant">Assistant Invigilator</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-2">
+                                    <button type="button" class="btn btn-danger btn-sm remove-invigilator" style="display: none;">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="addInvigilator">
+                            <i class="fas fa-plus"></i> Add Another Invigilator
+                        </button>
+                        <small class="form-text text-muted">Only lecturers assigned to the selected course are shown.</small>
+                    </div>
+                    
+                    <div class="mb-3">
                         <label for="instructions" class="form-label">Exam Instructions</label>
                         <textarea class="form-control" id="instructions" name="instructions" rows="4" 
                                   placeholder="Special instructions for this exam..."></textarea>
@@ -453,6 +539,9 @@ function editExamination(examination) {
     document.getElementById('instructions').value = examination.instructions || '';
     document.getElementById('submitBtn').textContent = 'Update Examination';
     
+    // Load lecturers for the selected course and populate current invigilators
+    loadLecturersForCourse(examination.course_id, examination.invigilators || []);
+    
     new bootstrap.Modal(document.getElementById('examinationModal')).show();
 }
 
@@ -465,6 +554,132 @@ function scheduleExam(examId) {
     window.location.href = 'schedules.php?exam_id=' + examId;
 }
 
+let invigilatorCount = 1;
+
+function loadLecturersForCourse(courseId, currentInvigilators = []) {
+    const invigilatorSelects = document.querySelectorAll('.invigilator-select');
+    
+    // Clear existing options
+    invigilatorSelects.forEach(select => {
+        select.innerHTML = '<option value="">Select Invigilator</option>';
+    });
+    
+    if (!courseId) {
+        return;
+    }
+    
+    // Fetch lecturers assigned to this course
+    fetch(`get_course_lecturers.php?course_id=${courseId}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                // Populate all invigilator dropdowns
+                invigilatorSelects.forEach((select, index) => {
+                    data.lecturers.forEach(lecturer => {
+                        const option = document.createElement('option');
+                        option.value = lecturer.lecturer_id;
+                        option.textContent = `${lecturer.first_name} ${lecturer.last_name} (${lecturer.staff_id})`;
+                        select.appendChild(option);
+                    });
+                });
+                
+                // Set current invigilators if editing
+                if (currentInvigilators.length > 0) {
+                    populateCurrentInvigilators(currentInvigilators);
+                }
+            }
+        })
+        .catch(error => {
+            console.error('Error loading lecturers:', error);
+        });
+}
+
+function populateCurrentInvigilators(invigilators) {
+    const container = document.getElementById('invigilatorsContainer');
+    
+    // Clear current rows
+    container.innerHTML = '';
+    
+    // Add rows for each current invigilator
+    invigilators.forEach((invigilator, index) => {
+        addInvigilatorRow(index, invigilator.lecturer_id, invigilator.role_type);
+    });
+    
+    invigilatorCount = invigilators.length;
+    
+    // If no invigilators, add one empty row
+    if (invigilators.length === 0) {
+        addInvigilatorRow(0);
+        invigilatorCount = 1;
+    }
+}
+
+function addInvigilatorRow(index = null, selectedLecturerId = '', selectedRoleType = 'Assistant') {
+    if (index === null) {
+        index = invigilatorCount++;
+    }
+    
+    const container = document.getElementById('invigilatorsContainer');
+    const rowHtml = `
+        <div class="invigilator-row row mb-2">
+            <div class="col-md-7">
+                <select class="form-control invigilator-select" name="invigilators[${index}][lecturer_id]">
+                    <option value="">Select Invigilator</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <select class="form-control" name="invigilators[${index}][role_type]">
+                    <option value="Chief" ${selectedRoleType === 'Chief' ? 'selected' : ''}>Chief Invigilator</option>
+                    <option value="Assistant" ${selectedRoleType === 'Assistant' ? 'selected' : ''}>Assistant Invigilator</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button type="button" class="btn btn-danger btn-sm remove-invigilator" ${index === 0 ? 'style="display: none;"' : ''}>
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+    `;
+    
+    container.insertAdjacentHTML('beforeend', rowHtml);
+    
+    // Set selected lecturer if provided
+    if (selectedLecturerId) {
+        const newSelect = container.lastElementChild.querySelector('.invigilator-select');
+        newSelect.value = selectedLecturerId;
+    }
+    
+    updateRemoveButtons();
+}
+
+function updateRemoveButtons() {
+    const removeButtons = document.querySelectorAll('.remove-invigilator');
+    const rows = document.querySelectorAll('.invigilator-row');
+    
+    removeButtons.forEach((button, index) => {
+        button.style.display = rows.length > 1 ? 'inline-block' : 'none';
+    });
+}
+
+// Add event listener for course selection
+document.getElementById('courseId').addEventListener('change', function() {
+    loadLecturersForCourse(this.value);
+});
+
+// Add event listener for adding invigilators
+document.getElementById('addInvigilator').addEventListener('click', function() {
+    addInvigilatorRow();
+});
+
+// Add event listener for removing invigilators
+document.addEventListener('click', function(e) {
+    if (e.target.classList.contains('remove-invigilator') || e.target.parentElement.classList.contains('remove-invigilator')) {
+        const row = e.target.closest('.invigilator-row');
+        row.remove();
+        updateRemoveButtons();
+    }
+});
+
 // Reset modal when closed
 document.getElementById('examinationModal').addEventListener('hidden.bs.modal', function () {
     document.getElementById('examinationForm').reset();
@@ -472,6 +687,30 @@ document.getElementById('examinationModal').addEventListener('hidden.bs.modal', 
     document.getElementById('formAction').value = 'create';
     document.getElementById('examId').value = '';
     document.getElementById('submitBtn').textContent = 'Create Examination';
+    
+    // Reset invigilators to one empty row
+    const container = document.getElementById('invigilatorsContainer');
+    container.innerHTML = `
+        <div class="invigilator-row row mb-2">
+            <div class="col-md-7">
+                <select class="form-control invigilator-select" name="invigilators[0][lecturer_id]">
+                    <option value="">Select Invigilator</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <select class="form-control" name="invigilators[0][role_type]">
+                    <option value="Chief">Chief Invigilator</option>
+                    <option value="Assistant">Assistant Invigilator</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <button type="button" class="btn btn-danger btn-sm remove-invigilator" style="display: none;">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+    `;
+    invigilatorCount = 1;
 });
 </script>
 

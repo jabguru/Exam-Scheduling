@@ -164,24 +164,34 @@ include '../includes/header.php';
             </div>
             <div class="card-body">
                 <div class="row">
-                    <div class="col-md-3 mb-2">
+                    <div class="col-md-2 mb-2">
                         <a href="users.php" class="btn btn-primary w-100">
                             <i class="fas fa-user-plus"></i> Manage Users
                         </a>
                     </div>
-                    <div class="col-md-3 mb-2">
+                    <div class="col-md-2 mb-2">
+                        <a href="lecturer_courses.php" class="btn btn-secondary w-100">
+                            <i class="fas fa-user-tie"></i> Lecturer Assignments
+                        </a>
+                    </div>
+                    <div class="col-md-2 mb-2">
                         <a href="schedules.php" class="btn btn-success w-100">
                             <i class="fas fa-calendar-plus"></i> Create Schedule
                         </a>
                     </div>
-                    <div class="col-md-3 mb-2">
+                    <div class="col-md-2 mb-2">
                         <a href="venues.php" class="btn btn-info w-100">
                             <i class="fas fa-building"></i> Manage Venues
                         </a>
                     </div>
-                    <div class="col-md-3 mb-2">
+                    <div class="col-md-2 mb-2">
                         <a href="courses.php" class="btn btn-warning w-100">
                             <i class="fas fa-book"></i> Manage Courses
+                        </a>
+                    </div>
+                    <div class="col-md-2 mb-2">
+                        <a href="examinations.php" class="btn btn-dark w-100">
+                            <i class="fas fa-clipboard-list"></i> Examinations
                         </a>
                     </div>
                 </div>

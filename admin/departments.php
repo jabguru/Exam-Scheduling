@@ -82,11 +82,10 @@ try {
                 d.*,
                 COUNT(DISTINCT c.course_id) as course_count,
                 COUNT(DISTINCT s.student_id) as student_count,
-                COUNT(DISTINCT f.faculty_id) as faculty_count
+                COUNT(DISTINCT l.lecturer_id) as lecturer_count
               FROM departments d
-              LEFT JOIN courses c ON d.department_id = c.department_id
               LEFT JOIN students s ON d.department_id = s.department_id
-              LEFT JOIN faculty f ON d.department_id = f.department_id
+              LEFT JOIN lecturers l ON d.department_id = l.department_id
               GROUP BY d.department_id
               ORDER BY d.department_name";
     
@@ -156,8 +155,8 @@ include '../includes/header.php';
                         </div>
                         <div class="col-4">
                             <div class="bg-light p-2 rounded">
-                                <h6 class="mb-0 text-info"><?php echo $department['faculty_count']; ?></h6>
-                                <small class="text-muted">Faculty</small>
+                                <h6 class="mb-0 text-info"><?php echo $department['lecturer_count']; ?></h6>
+                                <small class="text-muted">Lecturers</small>
                             </div>
                         </div>
                     </div>
